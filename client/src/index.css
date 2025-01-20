@@ -1,0 +1,18 @@
+* {
+  margin: 0;
+  padding: 0;
+box-sizing: border-box;
+}
+
+body{
+  font-family:"Roboto" ,sans-serif;
+}
+a{
+  color: #60b570 !important;
+  text-decoration: none;
+  padding: 20px;
+  margin-top: 20px;
+}
+a:hover{
+  color: black !important;
+}
