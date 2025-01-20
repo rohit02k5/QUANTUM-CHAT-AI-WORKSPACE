@@ -89,19 +89,19 @@ bash
 Copy
 Edit
 npm run dev
-![Screenshot 2025-01-20 155921](https://github.com/user-attachments/assets/d31fb41d-c3ad-446e-90a3-3b96a3714655)
-![Screenshot 2025-01-20 155921](https://github.com/user-attachments/assets/4b0d9273-b97b-4885-b947-c83446604a43)
+![Screenshot 2025-01-20 155921](https://github.com/user-attachments/assets/488f7a04-8051-4864-a7da-973b3d46aca7)
+![Screenshot 2025-01-20 155931](https://github.com/user-attachments/assets/e0f97d5b-2c4a-47bf-b6ab-aca5c73dd2ff)
+![Screenshot 2025-01-20 160006](https://github.com/user-attachments/assets/fee5a51c-e787-4e1b-ae89-431f1cd20596)
 
-![Screenshot 2025-01-20 155921](https://github.com/user-attachments/assets/c2a53f2d-3eca-4db6-8343-20cf3e7ce528)
-![Screenshot 2025-01-20 155921](https://github.com/user-attachments/assets/0daae414-71f2-429e-9ddd-2a0da8ca6e3b)
+![Screenshot 2025-01-20 160042](https://github.com/user-attachments/assets/f1655960-eb1b-4edb-b908-63d5ce024cd8)
+![Screenshot 2025-01-20 160049](https://github.com/user-attachments/assets/50c33060-21a0-4cbc-ad9a-5922784a7fb1)
+![Screenshot 2025-01-20 160422](https://github.com/user-attachments/assets/82925902-09ee-49fd-b298-88a3098621ce)
 
-![Screenshot 2025-01-20 155921](https://github.com/user-attachments/assets/88ff887c-f826-451f-bc7f-b5c889ba047e)
-![Screenshot 2025-01-20 155921](https://github.com/user-attachments/assets/923e0af4-964a-41de-8168-9d202d8e65bf)
-![Screenshot 2025-01-20 155921](https://github.com/user-attachments/assets/447dfac6-c962-4612-af75-d467134a416a)
-![Screenshot 2025-01-20 155921](https://github.com/user-attachments/assets/677b634b-dcf3-434a-8dff-2df936f64d7a)
-![Screenshot 2025-01-20 155921](https://github.com/user-attachments/assets/c9243540-b920-4e91-89fe-23a9d70315cd)
-![Screenshot 2025-01-20 155921](https://github.com/user-attachments/assets/07cc65eb-ad7d-46ca-b4e4-a96d09baeda1)
-![Screenshot 2025-01-20 155921](https://github.com/user-attachments/assets/ba707e0a-0bf0-4e3b-bfbf-887d778b7ca8)
+![Screenshot 2025-01-20 160231](https://github.com/user-attachments/assets/8b39687a-84e7-4396-a597-ac6424f14c5d)
+![Screenshot 2025-01-20 160240](https://github.com/user-attachments/assets/16793325-a4f0-4850-8d7d-ae95565b26cd)
+![Screenshot 2025-01-20 160249](https://github.com/user-attachments/assets/8ea5800a-7c2d-4f93-9fc4-70e3ecc57995)
+![Screenshot 2025-01-20 160556](https://github.com/user-attachments/assets/6c54baec-1a03-43c2-96fe-21d6c0734c8c)
+![Screenshot 2025-01-20 160609](https://github.com/user-attachments/assets/f9df5ffd-6ee2-45dc-9592-2f4789ccc2b0)
 
 📈 Future Enhancements
 Add real-time sentiment analysis to the chatbot.
