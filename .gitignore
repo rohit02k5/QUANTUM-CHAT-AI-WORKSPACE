@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+client/node_modules/
+node_modules_old/
+client/node_modules_old/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Builds
+build/
+client/build/
+dist/
+
+# Uploads and temporary files
+uploads/
+*.log
+extraction_debug.txt
+extraction_error.log
+tmp/
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
