@@ -22,6 +22,13 @@ This project demonstrates **real-world system design, AI orchestration, security
 
 ---
 
+## 🚀 Live Demo
+
+🔗 **Quantum AI:**  
+👉 https://quantum-chat-frontend.onrender.com/login
+
+---
+
 ## ✨ Why Quantum Stands Out
 
 - ✅ End-to-end **MERN Stack** architecture  
