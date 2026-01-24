@@ -1,11 +1,11 @@
-# 🌌 Quantum — Unified AI Intelligence Suite
+# Quantum — Unified AI Intelligence Suite
 
 > **Where Artificial Intelligence, Knowledge, and Creativity Converge.**  
 > *A production-grade AI workspace built with MERN, GenAI, and advanced data visualization.*
 
 ---
 
-## 🧠 Overview
+## Overview
 
 **Quantum** is a **full-scale AI Intelligence Suite**, not just a chatbot.
 
@@ -22,70 +22,70 @@ This project demonstrates **real-world system design, AI orchestration, security
 
 ---
 
-## 🚀 Live Demo
+## Live Demo
 
 🔗 **Quantum AI:**  
-👉 https://quantum-chat-frontend.onrender.com/login
+ https://quantum-chat-frontend.onrender.com/login
 
 ---
 
-## ✨ Why Quantum Stands Out
+## Why Quantum Stands Out
 
-- ✅ End-to-end **MERN Stack** architecture  
-- ✅ Multiple **AI systems orchestrated together**  
-- ✅ Secure **OAuth + JWT hybrid authentication**  
-- ✅ Advanced **3D knowledge graphs & analytics**  
-- ✅ Integrated **AI Image Generation (NeuraPix)**  
-- ✅ Product-level **UI/UX & workflow design**  
-- ✅ **Production-ready deployment** mindset  
-
----
-
-## 🧩 Core Modules
+- End-to-end **MERN Stack** architecture  
+- Multiple **AI systems orchestrated together**  
+- Secure **OAuth + JWT hybrid authentication**  
+- Advanced **3D knowledge graphs & analytics**  
+- Integrated **AI Image Generation (NeuraPix)**  
+- Product-level **UI/UX & workflow design**  
+- **Production-ready deployment** mindset  
 
 ---
 
-## 🔐 Authentication & Security System (Enterprise-Grade)
+## Core Modules
+
+---
+
+## Authentication & Security System (Enterprise-Grade)
 
 Quantum is built with a **security-first architecture**, clearly demonstrated by its authentication flows.
 
-### 🔑 Features
+### Features
 - Email & Password authentication  
 - OAuth 2.0 login with **Google** and **GitHub**  
 - Secure **Sign Up / Sign In / Forgot Password** flows  
 - Encrypted password storage using **bcrypt**  
 - Password reset via **secure email token (SMTP)**  
 
-### 🛡️ Security Design
+### Security Design
 - **JWT Access Tokens** (15 minutes)  
 - **JWT Refresh Tokens** (15 days)  
 - Tokens stored in **HttpOnly cookies** (XSS-safe)  
 - **Helmet.js** for secure headers (CSP, XSS, CSRF)
 
-📸 *Screenshots show clean, professional authentication UI — exactly what production apps require.*
+*Screenshots show clean, professional authentication UI — exactly what production apps require.*
 
 ---
 
-## 🧠 Quantum Chat — Context-Aware Conversational AI
+## Quantum Chat — Context-Aware Conversational AI
 
 > An intelligent assistant designed for **deep reasoning, learning, and productivity**.
 
-### 🚀 Capabilities
+### Capabilities
 - Context-retaining multi-turn conversations  
 - Coding help, explanations, reasoning, and creativity  
 - Chat history persisted in **MongoDB**  
 - File-aware intelligence (chat with documents)  
 
-### ⭐ Unique Feature
+### Unique Feature
 - **One-click conversion of conversations into structured mind maps** using **Mermaid.js**, enabling visual understanding of complex topics.
 
 ---
 
-## 📊 Insight Engine — Deep Content & Knowledge Intelligence
+## Insight Engine — Deep Content & Knowledge Intelligence
 
 > Transform raw text into **actionable intelligence**.
 
-### 🔍 Features
+### Features
 - Readability analysis (Flesch–Kincaid)  
 - Tone & sentiment analysis  
 - Estimated reading time  
@@ -93,11 +93,11 @@ Quantum is built with a **security-first architecture**, clearly demonstrated by
 - **Interactive 3D Knowledge Graphs**  
 - **Content DNA radar charts**
 
-### 📈 Visualization Stack
+### Visualization Stack
 - **Plotly.js** — 3D entity relationships  
 - **Chart.js** — radar & analytics charts  
 
-### 🎯 Use Cases
+### Use Cases
 - Market & business analysis  
 - SEO & content evaluation  
 - Academic research  
@@ -105,11 +105,11 @@ Quantum is built with a **security-first architecture**, clearly demonstrated by
 
 ---
 
-## 🎓 Quantum Studio — Document Intelligence Workspace
+## Quantum Studio — Document Intelligence Workspace
 
 > A powerful learning and research environment.
 
-### 📄 Capabilities
+### Capabilities
 - Upload multiple documents (**PDF / TXT / DOCX**)  
 - Compare documents side-by-side  
 - Generate structured summaries  
@@ -118,17 +118,17 @@ Quantum is built with a **security-first architecture**, clearly demonstrated by
 
 ---
 
-## 🎨 NeuraPix — AI Image Generation Studio (Integrated)
+## NeuraPix — AI Image Generation Studio (Integrated)
 
 **NeuraPix**, your previous AI Image Generator project, is now **fully integrated into Quantum** as a creative intelligence module.
 
-### 🖼️ Features
+### Features
 - Text-to-image generation  
 - Powered by **Stable Diffusion via Hugging Face**  
 - Prompt-driven creative workflows  
 - High-quality AI-generated visuals  
 
-### 💡 Why This Matters
+### Why This Matters
 This demonstrates:
 - Modular system design  
 - Reusability of prior projects  
@@ -136,11 +136,11 @@ This demonstrates:
 
 ---
 
-## 🗂️ Knowledge Base — Persistent AI Memory
+## Knowledge Base — Persistent AI Memory
 
 > Your personal AI knowledge repository.
 
-### 📚 Features
+### Features
 - Stores uploaded files & insights  
 - Global search across workspace  
 - Acts as long-term AI memory  
@@ -148,11 +148,11 @@ This demonstrates:
 
 ---
 
-## 🧑‍💼 Executive Assistant — Strategy & Decision Intelligence
+## Executive Assistant — Strategy & Decision Intelligence
 
 > AI outputs designed for **business and leadership contexts**.
 
-### 📌 Outputs
+### Outputs
 - Executive summaries  
 - Action items  
 - Strategic gaps & risks  
@@ -160,7 +160,7 @@ This demonstrates:
 
 ---
 
-## 🧠 AI & Intelligence Stack
+## AI & Intelligence Stack
 
 | Function | Technology |
 |--------|------------|
@@ -172,7 +172,7 @@ This demonstrates:
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 ### Frontend
 - React.js 18  
@@ -194,7 +194,7 @@ This demonstrates:
 
 ---
 
-## 🏗️ Architecture Philosophy
+## Architecture Philosophy
 
 - Modular & scalable backend  
 - Clear separation of concerns  
@@ -204,7 +204,7 @@ This demonstrates:
 
 ---
 
-## 🧠 Engineering Challenges & Learnings
+## Engineering Challenges & Learnings
 
 - Designing secure OAuth + JWT token rotation  
 - Managing long AI conversation context efficiently  
@@ -214,7 +214,7 @@ This demonstrates:
 
 ---
 
-## 📐 High-Level Architecture
+## High-Level Architecture
 
 ```text
 Frontend (React)
@@ -226,7 +226,7 @@ AI Services (Gemini, Hugging Face)
 MongoDB Atlas
 ```
 ---
-## 🚀 Local Setup
+## Local Setup
 ```text
 git clone https://github.com/rohit02k5/QUANTUM-CHAT-AI.git
 cd QUANTUM-CHAT-AI
@@ -243,7 +243,7 @@ cd client
 npm install
 npm start
 ```
-🌍 Deployment Ready
+Deployment Ready
 Quantum is production-ready and designed for deployment on platforms like Render or Vercel.
 
 SPA routing handled correctly
@@ -256,7 +256,7 @@ Secure CORS policies
 
 
 
-📸 Screenshots & UI Highlights
+Screenshots & UI Highlights
 
 Screenshots demonstrate authentication flows, AI chat, document intelligence, 3D graphs, and executive insights.
 
@@ -276,11 +276,11 @@ Screenshots demonstrate authentication flows, AI chat, document intelligence, 3D
 <img width="1874" height="894" alt="Screenshot 2025-12-12 233108" src="https://github.com/user-attachments/assets/82246672-5c9e-4e7d-abd3-67cc5e95fd93" />
 <img width="1914" height="900" alt="Screenshot 2025-12-12 233308" src="https://github.com/user-attachments/assets/934328b2-8c45-4782-ba0e-eac66e388b70" />
 
-👨‍💻 Author
+Author
 
 Swarna Venkata Sai Rohit
-🎓 B.Tech Electrical Engineering — IIT Bhilai
-💻 Full-Stack & AI Systems Engineer
+B.Tech Electrical Engineering — IIT Bhilai
+Full-Stack & AI Systems Engineer
 
 GitHub: https://github.com/rohit02k5
 Linkedin: https://www.linkedin.com/in/svs-rohit-baa147283
