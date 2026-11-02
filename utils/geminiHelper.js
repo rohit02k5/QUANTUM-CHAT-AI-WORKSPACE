@@ -12,9 +12,19 @@ class GeminiHelper {
             console.error("Missing GEMINI_API_KEY in .env");
         }
         this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        // Default to user's preferred model, fallback to stable
-        this.modelName = "gemini-2.5-flash";
+        this.modelName = "gemini-pro-latest";
         this.model = this.genAI.getGenerativeModel({ model: this.modelName });
+    }
+
+    async getEmbedding(text) {
+        try {
+            const embeddingModel = this.genAI.getGenerativeModel({ model: "models/gemini-embedding-2" });
+            const result = await embeddingModel.embedContent(text);
+            return result.embedding.values;
+        } catch (error) {
+            console.error("[GeminiHelper] Embedding Error:", error.message);
+            throw error;
+        }
     }
 
     /**
@@ -43,14 +53,16 @@ class GeminiHelper {
             } catch (error) {
                 const isTransient = error.status === 503 || error.status === 429 || error.message.includes("Overloaded");
                 if (isTransient && attempt < retries) {
-                    const waitTime = attempt * 2000; // Exponential-ish backoff: 2s, 4s, 6s
+                    const waitTime = attempt * 2000;
                     console.log(`[GeminiHelper] Error ${error.status}. Retrying in ${waitTime}ms (Attempt ${attempt}/${retries})`);
                     await delay(waitTime);
 
-                    // Optional: Switch model on repeated failure if it was a 404 or persistent 503
-                    if (attempt === 2 && this.modelName === "gemini-2.5-flash") {
-                        console.log("[GeminiHelper] Switching to fallback model gemini-1.5-flash");
-                        this.model = this.genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+                    // Switch to fallback model on persistent 503
+                    if (attempt === 2) {
+                        const fallbackModels = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"];
+                        this.modelName = fallbackModels[0];
+                        console.log(`[GeminiHelper] Switching to fallback model ${this.modelName}`);
+                        this.model = this.genAI.getGenerativeModel({ model: this.modelName });
                     }
                 } else {
                     console.error("[GeminiHelper] Final Failure:", error.message);
@@ -64,6 +76,23 @@ class GeminiHelper {
     getText(result) {
         if (!result || !result.response) return "";
         return result.response.text();
+    }
+
+    /**
+     * Generate chat response with history and retry logic.
+     * Uses generateContentWithRetry with formatted history to avoid startChat() hanging issues.
+     * @param {Array} history - Array of {role: "user"|"model", parts: [{text: string}]}
+     * @param {string} prompt - Current user message
+     * @param {number} retries - Number of retry attempts
+     */
+    async generateChatWithRetry(history, prompt, retries = 3) {
+        // Format history + prompt into a single text prompt
+        const historyText = history
+            .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.parts?.[0]?.text || ""}`)
+            .join("\n");
+        const fullPrompt = `${historyText}\n\nUser: ${prompt}\nAssistant:`;
+
+        return this.generateContentWithRetry(fullPrompt, {}, retries);
     }
 }
 

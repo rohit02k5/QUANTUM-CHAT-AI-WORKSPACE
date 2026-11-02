@@ -6,6 +6,7 @@ const bodyParser = require("body-parser");
 const colors = require("colors");
 const morgan = require("morgan");
 const connectDB = require("./config/db");
+const mongoose = require("mongoose");
 const authRoutes = require('./routes/authRoute');
 
 // Validate critical env vars
@@ -24,6 +25,29 @@ const app = express();
 app.set("trust proxy", 1);
 app.use(passport.initialize());
 connectDB();
+
+// Once DB is up: ensure the Atlas vector-search index exists (best-effort) and
+// sweep stale temp uploads. Failures only downgrade RAG to the local fallback.
+mongoose.connection.once("open", async () => {
+    const { VECTOR_INDEX } = require("./utils/retriever");
+    try {
+        await mongoose.connection.collection("chunks").createSearchIndex({
+            name: VECTOR_INDEX,
+            type: "vectorSearch",
+            definition: {
+                fields: [
+                    { type: "vector", path: "embedding", numDimensions: 3072, similarity: "cosine" },
+                    { type: "filter", path: "user" },
+                    { type: "filter", path: "file" },
+                ],
+            },
+        });
+        console.log(`[RAG] Vector search index '${VECTOR_INDEX}' ensured`);
+    } catch (err) {
+        console.warn(`[RAG] Could not ensure vector index '${VECTOR_INDEX}' (may already exist): ${err.message}`);
+    }
+    require("./controllers/fileController").cleanupTempFiles();
+});
 app.use(
   helmet.contentSecurityPolicy({
     directives: {

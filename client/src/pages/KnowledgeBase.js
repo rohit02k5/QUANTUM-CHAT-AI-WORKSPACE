@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { Box, Typography, TextField, InputAdornment, Grid, Paper, Chip, useTheme, Card, CardContent } from "@mui/material";
+import { Box, Typography, TextField, InputAdornment, Grid, Paper, Chip, useTheme, Card, CardContent, IconButton } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import DescriptionIcon from "@mui/icons-material/Description";
 import ImageIcon from "@mui/icons-material/Image";
+import DeleteIcon from "@mui/icons-material/Delete";
 import axios from "../axiosConfig";
+import toast from "react-hot-toast";
 import { motion } from "framer-motion";
 
 const KnowledgeBase = () => {
@@ -29,6 +31,7 @@ const KnowledgeBase = () => {
 
                 // Map files to media items format
                 const recentFiles = files.slice(0, 6).map(f => ({
+                    id: f._id,
                     type: f.mimetype.includes("image") ? "image" : "doc",
                     name: f.originalName,
                     originalName: f.originalName,
@@ -43,6 +46,18 @@ const KnowledgeBase = () => {
         };
         fetchData();
     }, []);
+
+    const handleDeleteFile = async (id, e) => {
+        e.stopPropagation();
+        try {
+            await axios.delete(`/api/v1/files/${id}`);
+            setMediaItems((prev) => prev.filter((item) => item.id !== id));
+            setStats((prev) => ({ ...prev, files: prev.files - 1 }));
+            toast.success("File deleted");
+        } catch (err) {
+            toast.error("Delete failed");
+        }
+    };
 
     const handleSearch = async (e) => {
         setSearchTerm(e.target.value);
@@ -147,9 +162,14 @@ const KnowledgeBase = () => {
                                 <Box sx={{ height: 140, bgcolor: theme.palette.neutral?.light || "#e5e5e5", display: "flex", alignItems: "center", justifyContent: "center" }}>
                                     {item.type === "image" ? <ImageIcon sx={{ fontSize: 60, opacity: 0.5 }} /> : <DescriptionIcon sx={{ fontSize: 60, opacity: 0.5 }} />}
                                 </Box>
-                                <CardContent>
-                                    <Typography variant="h6" noWrap>{item.originalName}</Typography>
-                                    <Typography variant="caption" color="text.secondary">{item.date}</Typography>
+                                <CardContent sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                    <Box sx={{ minWidth: 0 }}>
+                                        <Typography variant="h6" noWrap>{item.originalName}</Typography>
+                                        <Typography variant="caption" color="text.secondary">{item.date}</Typography>
+                                    </Box>
+                                    <IconButton size="small" onClick={(e) => handleDeleteFile(item.id, e)}>
+                                        <DeleteIcon fontSize="small" />
+                                    </IconButton>
                                 </CardContent>
                             </Card>
                         </motion.div>

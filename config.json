@@ -1,0 +1,21 @@
+{
+  "app": "Quantum AI",
+  "version": "1.0.0",
+  "features": [
+    "rag",
+    "chat",
+    "studio",
+    "neurapix"
+  ],
+  "auth": {
+    "type": "jwt",
+    "oauth": [
+      "google",
+      "github"
+    ]
+  },
+  "vector": {
+    "dimensions": 3072,
+    "index": "chunks_embedding_index"
+  }
+}

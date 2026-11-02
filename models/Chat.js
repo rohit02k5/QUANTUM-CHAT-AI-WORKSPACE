@@ -20,6 +20,14 @@ const chatSchema = new mongoose.Schema({
                 type: String,
                 required: true,
             },
+            sources: [
+                {
+                    fileId: { type: mongoose.Schema.Types.ObjectId, ref: "File" },
+                    originalName: String,
+                    score: Number,
+                    snippet: String,
+                },
+            ],
             timestamp: {
                 type: Date,
                 default: Date.now,

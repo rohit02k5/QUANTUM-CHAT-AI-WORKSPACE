@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Box, Typography, TextField, IconButton, Paper, Avatar, Tooltip, CircularProgress, Button } from "@mui/material";
+import { Box, Typography, TextField, IconButton, Paper, Avatar, Tooltip, CircularProgress, Button, Menu, MenuItem, Checkbox, ListItemText } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import SendIcon from "@mui/icons-material/Send";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome"; // For Mindmap
-import contentCopyIcon from "@mui/icons-material/ContentCopy";
 import axios from "../axiosConfig";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -12,6 +11,7 @@ import { atomDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { motion, AnimatePresence } from "framer-motion";
 import toast from "react-hot-toast";
 import DeleteIcon from "@mui/icons-material/Delete";
+import DescriptionIcon from "@mui/icons-material/Description";
 import Chip from "@mui/material/Chip";
 import Modal from "@mui/material/Modal";
 import DownloadIcon from "@mui/icons-material/Download";
@@ -21,7 +21,6 @@ import CloseIcon from "@mui/icons-material/Close";
 const Mermaid = ({ chart }) => {
     const ref = useRef(null);
     const [open, setOpen] = useState(false);
-    const theme = useTheme();
 
     useEffect(() => {
         if (ref.current) {
@@ -107,7 +106,7 @@ const Mermaid = ({ chart }) => {
     );
 };
 
-const MessageBubble = ({ role, content }) => {
+const MessageBubble = ({ role, content, sources }) => {
     const theme = useTheme();
     const isUser = role === "user";
 
@@ -177,6 +176,23 @@ const MessageBubble = ({ role, content }) => {
                         {content}
                     </ReactMarkdown>
                 )}
+                {sources && sources.length > 0 && (
+                    <Box sx={{ mt: 2 }}>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
+                            Sources
+                        </Typography>
+                        {sources.map((s, idx) => (
+                            <Chip
+                                key={idx}
+                                size="small"
+                                label={`${s.originalName} • ${(s.score * 100).toFixed(1)}%`}
+                                variant="outlined"
+                                sx={{ mr: 0.5, mb: 0.5 }}
+                                title={s.snippet || s.originalName}
+                            />
+                        ))}
+                    </Box>
+                )}
             </Paper>
         </motion.div>
     );
@@ -196,16 +212,34 @@ const Chat = () => {
     const [selectedFile, setSelectedFile] = useState(null);
     const [uploading, setUploading] = useState(false);
     const [saveToKB, setSaveToKB] = useState(false); // Default: Don't save to KB
+    const [useDocuments, setUseDocuments] = useState(true); // Auto-RAG: on by default
+    const [documents, setDocuments] = useState([]); // User's indexed KB files
+    const [selectedDocIds, setSelectedDocIds] = useState([]); // Empty = search all docs
+    const [docMenuAnchor, setDocMenuAnchor] = useState(null);
     const fileInputRef = useRef(null);
     const bottomRef = useRef(null);
 
     useEffect(() => {
         loadChatHistory();
+        loadDocs();
     }, []);
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages]);
+
+    const loadDocs = async () => {
+        try {
+            const { data } = await axios.get("/api/v1/files/list");
+            setDocuments((data.files || []).filter((f) => !f.isTemp));
+        } catch (error) {
+            console.error("Failed to load documents", error);
+        }
+    };
+
+    const toggleDoc = (id) => {
+        setSelectedDocIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    };
 
     const loadChatHistory = async () => {
         try {
@@ -253,6 +287,7 @@ const Chat = () => {
 
         const formData = new FormData();
         formData.append("file", file);
+        formData.append("saveToKB", saveToKB ? "true" : "false");
 
         setUploading(true);
         const toastId = toast.loading("Uploading...");
@@ -261,8 +296,9 @@ const Chat = () => {
             const { data } = await axios.post("/api/v1/files/upload", formData, {
                 headers: { "Authorization": `Bearer ${token}` }
             });
-            setSelectedFile({ id: data.file._id, name: data.file.originalName });
-            toast.success("File attached!", { id: toastId });
+            setSelectedFile({ id: data.file._id, name: data.file.originalName, temp: !data.indexed });
+            toast.success(data.indexed ? "File saved to knowledge base!" : "File attached (this message only)", { id: toastId });
+            if (data.indexed) loadDocs();
         } catch (error) {
             console.error(error);
             toast.error("Upload failed", { id: toastId });
@@ -293,9 +329,11 @@ const Chat = () => {
                 message: msgToSend,
                 chatId,
                 fileId: fileToSend,
+                useDocuments,
+                documentIds: selectedDocIds,
             });
 
-            setMessages((prev) => [...prev, { role: "model", content: data.response }]);
+            setMessages((prev) => [...prev, { role: "model", content: data.response, sources: data.sources }]);
 
             // If it was a new chat, update ID and reload history to show it in sidebar
             if (!chatId) {
@@ -394,7 +432,7 @@ const Chat = () => {
                             </Box>
                         )}
                         {messages.map((msg, index) => (
-                            <MessageBubble key={index} role={msg.role} content={msg.content} />
+                            <MessageBubble key={index} role={msg.role} content={msg.content} sources={msg.sources} />
                         ))}
                         {loading && (
                             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -411,25 +449,58 @@ const Chat = () => {
                 <Box sx={{ mb: 1, px: 2 }}>
                     {selectedFile && (
                         <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
-                            <Chip label={selectedFile.name} onDelete={clearFile} color="primary" variant="outlined" sx={{ bgcolor: theme.palette.background.paper }} />
-                            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                                <input
-                                    type="checkbox"
-                                    id="saveToKB"
-                                    checked={saveToKB}
-                                    onChange={(e) => setSaveToKB(e.target.checked)}
-                                    style={{ cursor: "pointer" }}
-                                />
-                                <Typography component="label" htmlFor="saveToKB" variant="caption" sx={{ cursor: "pointer", color: "text.secondary" }}>Save to KB</Typography>
-                            </Box>
+                            <Chip label={selectedFile.temp ? `${selectedFile.name} (temp)` : selectedFile.name} onDelete={clearFile} color="primary" variant="outlined" sx={{ bgcolor: theme.palette.background.paper }} />
                         </Box>
                     )}
                 </Box>
                 <Paper component="form" sx={{ p: "2px 4px", display: "flex", alignItems: "center", borderRadius: "24px", bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}`, boxShadow: "0px 4px 20px rgba(0,0,0,0.1)" }}>
-                    <input type="file" hidden ref={fileInputRef} onChange={handleFileSelect} accept=".pdf,.txt,.docx" />
+                    <input type="file" hidden ref={fileInputRef} onChange={handleFileSelect} accept=".pdf,.txt,.docx,.md,.csv,.json" />
                     <IconButton sx={{ p: "10px" }} aria-label="attach" onClick={() => fileInputRef.current.click()} disabled={uploading}>
                         {uploading ? <CircularProgress size={24} /> : <AttachFileIcon />}
                     </IconButton>
+                    <Tooltip title="Keep attached files in your knowledge base">
+                        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, px: 1 }}>
+                            <input
+                                type="checkbox"
+                                id="saveToKB"
+                                checked={saveToKB}
+                                onChange={(e) => setSaveToKB(e.target.checked)}
+                                style={{ cursor: "pointer" }}
+                            />
+                            <Typography component="label" htmlFor="saveToKB" variant="caption" sx={{ cursor: "pointer", color: "text.secondary" }}>Save to KB</Typography>
+                        </Box>
+                    </Tooltip>
+                    {documents.length > 0 && (
+                        <>
+                            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, px: 1 }}>
+                                <input
+                                    type="checkbox"
+                                    id="useDocs"
+                                    checked={useDocuments}
+                                    onChange={(e) => setUseDocuments(e.target.checked)}
+                                    style={{ cursor: "pointer" }}
+                                />
+                                <Typography component="label" htmlFor="useDocs" variant="caption" sx={{ cursor: "pointer", color: "text.secondary" }}>Use my documents</Typography>
+                            </Box>
+                            <Tooltip title={selectedDocIds.length ? `Searching ${selectedDocIds.length} selected doc(s)` : "Searching all documents — click to choose"}>
+                                <IconButton size="small" onClick={(e) => setDocMenuAnchor(e.currentTarget)} disabled={!useDocuments} sx={{ color: selectedDocIds.length ? "primary.main" : "text.secondary" }}>
+                                    <DescriptionIcon fontSize="small" />
+                                </IconButton>
+                            </Tooltip>
+                            <Menu anchorEl={docMenuAnchor} open={Boolean(docMenuAnchor)} onClose={() => setDocMenuAnchor(null)}>
+                                <MenuItem onClick={() => setSelectedDocIds([])}>
+                                    <Checkbox checked={selectedDocIds.length === 0} size="small" />
+                                    <ListItemText primary="All documents" />
+                                </MenuItem>
+                                {documents.map((d) => (
+                                    <MenuItem key={d._id} onClick={() => toggleDoc(d._id)}>
+                                        <Checkbox checked={selectedDocIds.includes(d._id)} size="small" />
+                                        <ListItemText primary={d.originalName} />
+                                    </MenuItem>
+                                ))}
+                            </Menu>
+                        </>
+                    )}
                     <TextField
                         sx={{ ml: 1, flex: 1 }}
                         placeholder={uploading ? "Uploading..." : "Ask Quantum AI..."}

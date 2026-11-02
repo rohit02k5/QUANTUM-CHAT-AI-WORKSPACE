@@ -4,7 +4,6 @@ import { CssBaseline } from '@mui/material';
 import { Toaster } from 'react-hot-toast';
 import { ThemeContextProvider } from './context/ThemeContext';
 import Layout from './components/Layout';
-import AuthLayout from './components/AuthLayout'; // Added AuthLayout
 import Homepage from './pages/Homepage'; // Dashboard
 import Register from './pages/Register';
 import Login from './pages/Login';

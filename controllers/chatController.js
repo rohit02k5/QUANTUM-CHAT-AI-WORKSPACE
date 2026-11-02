@@ -1,10 +1,14 @@
 const Chat = require("../models/Chat");
+const Chunk = require("../models/Chunk");
+const { retrieveChunks, buildContext } = require("../utils/retriever");
+const { removeFileArtifacts } = require("./fileController");
+const geminiHelper = require("../utils/geminiHelper");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const dotenv = require("dotenv");
 dotenv.config();
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const RAG_TOP_K = parseInt(process.env.RAG_TOP_K || "3", 10);
+const MAX_ATTACH_CHARS = parseInt(process.env.MAX_ATTACH_CHARS || "12000", 10);
 
 // Get User Chats
 exports.getUserChats = async (req, res) => {
@@ -23,12 +27,8 @@ exports.sendMessage = async (req, res) => {
             throw new Error("GEMINI_API_KEY is missing in environment variables");
         }
 
-        const { message, chatId, fileId } = req.body;
+        const { message, chatId, fileId, useDocuments, documentIds } = req.body;
         const userId = req.user._id;
-
-        // Lazy load model to ensure Env is ready
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
         let chat;
         if (chatId) {
@@ -47,19 +47,57 @@ exports.sendMessage = async (req, res) => {
         chat.messages.push({ role: "user", content: message });
 
         let prompt = message;
+
+        // RAG: retrieve relevant chunks from the user's uploaded documents.
+        // Auto-enabled whenever the user has indexed docs; the frontend toggle
+        // (useDocuments === false) can disable it per message.
+        let sources = [];
+        const hasDocs = useDocuments !== false && (await Chunk.exists({ user: userId }));
+        if (hasDocs) {
+            try {
+                const scopedIds = Array.isArray(documentIds) ? documentIds : [];
+                const chunks = await retrieveChunks(userId, message, RAG_TOP_K, scopedIds);
+                if (chunks.length > 0) {
+                    const context = buildContext(chunks);
+                    prompt =
+                        "Answer the user's question using ONLY the provided sources when relevant. " +
+                        "If the answer is not in the sources, say so and answer from general knowledge.\n\n" +
+                        `=== SOURCES ===\n${context}\n=== END SOURCES ===\n\nQuestion: ${message}`;
+                    sources = chunks.map((c) => ({
+                        fileId: c.fileId,
+                        originalName: c.originalName,
+                        metadata: c.metadata,
+                        score: c.score,
+                        snippet: c.text.substring(0, 200),
+                    }));
+                    console.log(`[Chat][RAG] Retrieved ${chunks.length} chunks for user ${userId}`);
+                } else {
+                    console.log(`[Chat][RAG] No relevant chunks found - falling back to normal chat`);
+                }
+            } catch (ragErr) {
+                // Never break normal chat because RAG failed
+                console.error("[Chat][RAG] Retrieval error:", ragErr.message);
+            }
+        }
+
+        let tempFileDoc = null;
         if (fileId) {
             try {
                 const ChatFile = require("../models/File");
-                const fileDoc = await ChatFile.findById(fileId);
+                const fileDoc = await ChatFile.findOne({ _id: fileId, user: userId });
                 if (fileDoc && fileDoc.content) {
-                    prompt += `\n\n[Attached File Content: ${fileDoc.originalName}]\n${fileDoc.content}\n[End of File]`;
+                    const excerpt = fileDoc.content.length > MAX_ATTACH_CHARS
+                        ? fileDoc.content.substring(0, MAX_ATTACH_CHARS) + "\n[...truncated]"
+                        : fileDoc.content;
+                    prompt += `\n\n[Attached File Content: ${fileDoc.originalName}]\n${excerpt}\n[End of File]`;
+                    if (fileDoc.isTemp) tempFileDoc = fileDoc;
                 }
             } catch (fileErr) {
                 console.error("File attachment error:", fileErr);
             }
         }
 
-        // Generate response using Gemini (with history context)
+        // Generate response using Gemini (with history context) using helper with retries
         // Ensure history rules: 
         // 1. Roles must be 'user' or 'model'.
         // 2. No empty parts.
@@ -73,18 +111,21 @@ exports.sendMessage = async (req, res) => {
         // Debug Log
         console.log(`[Chat] Sending to Gemini: Prompt length ${prompt.length}, History length ${history.length}`);
 
-        const chatSession = model.startChat({
-            history: history,
+        const result = await geminiHelper.generateChatWithRetry(history, prompt);
+        const responseText = geminiHelper.getText(result);
+
+        // Add model response (attach sources metadata so history reload can show them)
+        chat.messages.push({
+            role: "model",
+            content: responseText,
+            sources: sources.length ? sources : undefined,
         });
 
-        const result = await chatSession.sendMessage(prompt);
-        const responseText = result.response.text();
-
-        // Add model response
-        chat.messages.push({ role: "model", content: responseText });
-
         await chat.save();
-        res.status(200).json({ response: responseText, chatId: chat._id, chat });
+        res.status(200).json({ response: responseText, chatId: chat._id, chat, sources: sources.length ? sources : undefined });
+
+        // Temp attachments are single-use: drop the record + disk file afterwards
+        if (tempFileDoc) removeFileArtifacts(tempFileDoc);
 
     } catch (err) {
         console.error("CHAT_ERROR_DETAILS:", err); // Logs to server console
@@ -126,9 +167,9 @@ exports.generateMindmap = async (req, res) => {
             throw new Error("GEMINI_API_KEY is missing");
         }
 
-        // Lazy load & use 2.5-flash (Verified Working)
+        // Lazy load - use current working model
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
 
         const { chatId } = req.body;
         const chat = await Chat.findById(chatId);

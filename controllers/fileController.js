@@ -1,79 +1,97 @@
 const File = require("../models/File");
+const Chunk = require("../models/Chunk");
+const DataLoader = require("../utils/dataLoader");
+const { recursiveSplitChunks } = require("../utils/chunker");
+const geminiHelper = require("../utils/geminiHelper");
 const fs = require("fs");
-const path = require("path");
-const pdfParse = require("pdf-parse");
-const mammoth = require("mammoth");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 const dotenv = require("dotenv");
 dotenv.config();
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+const DEFAULT_CHUNK_SIZE = 1000;
+const DEFAULT_CHUNK_OVERLAP = 200;
+const EMBED_CONCURRENCY = 5;
+const TEMP_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 
-// Upload File
+// Delete a File doc, its chunks, and the file on disk (best-effort)
+async function removeFileArtifacts(fileDoc) {
+    try { await Chunk.deleteMany({ file: fileDoc._id }); } catch (e) { /* ignore */ }
+    try { await File.deleteOne({ _id: fileDoc._id }); } catch (e) { /* ignore */ }
+    fs.promises.unlink(fileDoc.path).catch(() => {});
+}
+
+// Embed chunks in parallel batches so large files don't serialize N API calls
+async function embedChunksBatched(chunkDocs, userId, fileId) {
+    let created = 0;
+    for (let i = 0; i < chunkDocs.length; i += EMBED_CONCURRENCY) {
+        const batch = chunkDocs.slice(i, i + EMBED_CONCURRENCY);
+        const results = await Promise.all(
+            batch.map(async (cd) => {
+                try {
+                    const embedding = await geminiHelper.getEmbedding(cd.pageContent);
+                    await Chunk.create({
+                        user: userId,
+                        file: fileId,
+                        text: cd.pageContent,
+                        pageContent: cd.pageContent,
+                        metadata: cd.metadata,
+                        embedding,
+                    });
+                    return true;
+                } catch (err) {
+                    console.error("[Ingest] Chunk embed failed:", err.message);
+                    return false;
+                }
+            })
+        );
+        created += results.filter(Boolean).length;
+    }
+    return created;
+}
+
+// Upload File — document-based pipeline with metadata-forward chunks
 exports.uploadFile = async (req, res) => {
     try {
-        if (!req.file) {
-            return res.status(400).json({ message: "No file uploaded" });
-        }
-
+        if (!req.file) return res.status(400).json({ message: "No file uploaded" });
         const { originalname, filename, path: filePath, mimetype, size } = req.file;
         const userId = req.user._id;
 
-        // Extract text content
-        let content = "";
-        console.log(`[DEBUG] Processing file: ${originalname}, Mime: ${mimetype}, Path: ${filePath}`);
+        // Temp files are used for a single message only — never indexed for RAG.
+        // (ExecutiveAssistant already sends isTemp=true; Chat sends saveToKB.)
+        const isTemp = req.body.isTemp === "true" || req.body.saveToKB === "false";
 
-        try {
-            if (mimetype === "application/pdf") {
-                console.log("[DEBUG] Starting PDF extraction with Gemini...");
-                const fileData = fs.readFileSync(filePath);
-                const base64Data = fileData.toString("base64");
+        // 1. Load into LangChain-style Documents (pageContent + metadata)
+        const { documents } = await DataLoader.load(filePath, mimetype);
 
-                const result = await model.generateContent([
-                    {
-                        inlineData: {
-                            data: base64Data,
-                            mimeType: "application/pdf",
-                        },
-                    },
-                    { text: "Extract all text from this PDF document verbatim. Return only the extracted text." },
-                ]);
+        // 2. Save File record with summary metadata + extracted text
+        const newFile = new File({
+            user: userId, filename, originalName: originalname,
+            path: filePath, mimetype, size,
+            content: documents.map(d => d.pageContent).join("\n\n"),
+            isTemp,
+        });
+        await newFile.save();
 
-                content = result.response.text();
-                fs.appendFileSync("extraction_debug.txt", `[${new Date().toISOString()}] SUCCESS. File: ${originalname}. Length: ${content.length}\n`);
-                console.log(`[DEBUG] Gemini PDF extracted length: ${content ? content.length : 0}`);
-
-            } else if (mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") { // docx
-                const result = await mammoth.extractRawText({ path: filePath });
-                content = result.value;
-            } else if (mimetype === "text/plain") {
-                content = fs.readFileSync(filePath, "utf8");
-            }
-        } catch (extractionError) {
-            console.error("Text extraction failed:", extractionError);
-            fs.appendFileSync("extraction_debug.txt", `[${new Date().toISOString()}] ERROR. File: ${originalname}. Msg: ${extractionError.message}\n`);
-            fs.appendFileSync("extraction_error.log", `${new Date().toISOString()} - ${extractionError.message}\n${extractionError.stack}\n`);
-            content = `[Text extraction failed: ${extractionError.message}]`;
+        if (isTemp) {
+            return res.status(201).json({ message: "File attached (temporary)", file: newFile, indexed: false, chunkCount: 0 });
         }
 
-        console.log(`[DEBUG] Final content to save (first 100 chars): ${content ? content.substring(0, 100) : "Empty"}...`);
-
-        const newFile = new File({
-            user: userId,
-            filename,
-            originalName: originalname,
-            path: filePath,
-            mimetype,
-            size,
-            content,
+        // 3. RAG ingestion: split documents into overlapping chunks with metadata
+        const userChunkDocs = recursiveSplitChunks(documents, {
+            chunkSize: DEFAULT_CHUNK_SIZE,
+            chunkOverlap: DEFAULT_CHUNK_OVERLAP,
         });
 
-        await newFile.save();
-        res.status(201).json({ message: "File uploaded successfully", file: newFile });
+        const chunkCount = await embedChunksBatched(userChunkDocs, userId, newFile._id);
+
+        res.status(201).json({
+            message: chunkCount > 0 ? "File ingested successfully" : "File saved, but indexing produced no chunks",
+            file: newFile,
+            indexed: chunkCount > 0,
+            chunkCount,
+        });
     } catch (err) {
         console.error(err);
-        res.status(500).json({ message: "Server Error" });
+        res.status(500).json({ message: "Ingestion failed: " + err.message });
     }
 };
 
@@ -100,3 +118,29 @@ exports.searchFiles = async (req, res) => {
         res.status(500).json({ message: "Server Error" });
     }
 };
+
+// Delete File — removes the File record, all its chunks, and the file on disk
+exports.deleteFile = async (req, res) => {
+    try {
+        const file = await File.findOne({ _id: req.params.fileId, user: req.user._id });
+        if (!file) return res.status(404).json({ message: "File not found" });
+        await removeFileArtifacts(file);
+        res.status(200).json({ message: "File deleted" });
+    } catch (err) {
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// Sweep stale temp files (uploaded but never cleaned up — e.g. attach without send)
+exports.cleanupTempFiles = async (maxAgeMs = TEMP_FILE_TTL_MS) => {
+    try {
+        const cutoff = new Date(Date.now() - maxAgeMs);
+        const stale = await File.find({ isTemp: true, uploadDate: { $lt: cutoff } });
+        for (const f of stale) await removeFileArtifacts(f);
+        if (stale.length) console.log(`[Files] Cleaned up ${stale.length} stale temp file(s)`);
+    } catch (err) {
+        console.error("[Files] Temp cleanup failed:", err.message);
+    }
+};
+
+exports.removeFileArtifacts = removeFileArtifacts;
