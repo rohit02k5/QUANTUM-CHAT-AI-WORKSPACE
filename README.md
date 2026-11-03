@@ -310,14 +310,8 @@ Screenshots demonstrate authentication flows, AI chat, document intelligence, 3D
 
 Authors
 
-**Swarna Venkata Sai Rohit** — Original Creator
-B.Tech Electrical Engineering — IIT Bhilai
-Full-Stack & AI Systems Engineer
+**Swarna Venkata Sai Rohit** and **Harshita**
 
 GitHub: https://github.com/rohit02k5
-Linkedin: https://www.linkedin.com/in/svs-rohit-baa147283
-Email: rohitiitbh@gmail.com
-
-**Harshita** — Co-Author (RAG pipeline, document intelligence & workspace features)
 
 GitHub: https://github.com/harshita-sl
