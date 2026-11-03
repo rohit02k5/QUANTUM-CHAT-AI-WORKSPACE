@@ -59,6 +59,18 @@ const KnowledgeBase = () => {
         }
     };
 
+    // Files live behind auth — fetch as blob and open an object URL
+    const handleViewFile = async (item) => {
+        try {
+            const { data } = await axios.get(`/api/v1/files/${item.id}/view`, { responseType: "blob" });
+            const url = URL.createObjectURL(data);
+            window.open(url, "_blank");
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+        } catch (err) {
+            toast.error("Could not open file");
+        }
+    };
+
     const handleSearch = async (e) => {
         setSearchTerm(e.target.value);
         if (e.target.value.length > 2) {
@@ -152,12 +164,7 @@ const KnowledgeBase = () => {
                         <motion.div whileHover={{ y: -5 }}>
                             <Card
                                 sx={{ borderRadius: "16px", overflow: "hidden", cursor: "pointer" }}
-                                onClick={() => {
-                                    const API_URL = process.env.REACT_APP_API_URL || (process.env.NODE_ENV === "production"
-                                        ? "https://quantum-chat-backend.onrender.com"
-                                        : "http://localhost:8080");
-                                    window.open(`${API_URL}/uploads/${item.filename}`, "_blank");
-                                }}
+                                onClick={() => handleViewFile(item)}
                             >
                                 <Box sx={{ height: 140, bgcolor: theme.palette.neutral?.light || "#e5e5e5", display: "flex", alignItems: "center", justifyContent: "center" }}>
                                     {item.type === "image" ? <ImageIcon sx={{ fontSize: 60, opacity: 0.5 }} /> : <DescriptionIcon sx={{ fontSize: 60, opacity: 0.5 }} />}

@@ -1,7 +1,7 @@
 const dotenv = require("dotenv");
 dotenv.config();
-const Chunker = require("./utils/chunker");
-const geminiHelper = require("./utils/geminiHelper");
+const Chunker = require("../utils/chunker");
+const geminiHelper = require("../utils/geminiHelper");
 
 async function testChunkAndEmbed() {
     try {

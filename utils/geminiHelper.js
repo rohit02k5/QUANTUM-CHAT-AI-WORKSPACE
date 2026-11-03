@@ -12,13 +12,17 @@ class GeminiHelper {
             console.error("Missing GEMINI_API_KEY in .env");
         }
         this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        this.modelName = "gemini-pro-latest";
+        this.modelName = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+        // Verified against the live API — every entry must actually accept generateContent
+        this.fallbackModels = (process.env.GEMINI_FALLBACK_MODELS || "gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.6-flash").split(",");
         this.model = this.genAI.getGenerativeModel({ model: this.modelName });
     }
 
     async getEmbedding(text) {
         try {
-            const embeddingModel = this.genAI.getGenerativeModel({ model: "models/gemini-embedding-2" });
+            const embeddingModel = this.genAI.getGenerativeModel({
+                model: "models/" + (process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2"),
+            });
             const result = await embeddingModel.embedContent(text);
             return result.embedding.values;
         } catch (error) {
@@ -59,8 +63,7 @@ class GeminiHelper {
 
                     // Switch to fallback model on persistent 503
                     if (attempt === 2) {
-                        const fallbackModels = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"];
-                        this.modelName = fallbackModels[0];
+                        this.modelName = this.fallbackModels[0];
                         console.log(`[GeminiHelper] Switching to fallback model ${this.modelName}`);
                         this.model = this.genAI.getGenerativeModel({ model: this.modelName });
                     }

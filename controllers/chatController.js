@@ -3,7 +3,6 @@ const Chunk = require("../models/Chunk");
 const { retrieveChunks, buildContext } = require("../utils/retriever");
 const { removeFileArtifacts } = require("./fileController");
 const geminiHelper = require("../utils/geminiHelper");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 const dotenv = require("dotenv");
 dotenv.config();
 
@@ -27,8 +26,15 @@ exports.sendMessage = async (req, res) => {
             throw new Error("GEMINI_API_KEY is missing in environment variables");
         }
 
-        const { message, chatId, fileId, useDocuments, documentIds } = req.body;
+        let { message, chatId, fileId, useDocuments, documentIds } = req.body;
         const userId = req.user._id;
+
+        // Allow file-only messages (attach + send with no text)
+        if ((!message || !message.trim()) && fileId) message = "Please analyze the attached file.";
+        if (!message || !message.trim()) {
+            return res.status(400).json({ message: "Message cannot be empty" });
+        }
+        message = message.trim();
 
         let chat;
         if (chatId) {
@@ -38,7 +44,7 @@ exports.sendMessage = async (req, res) => {
         if (!chat) {
             chat = new Chat({
                 user: userId,
-                title: message.substring(0, 30) + "...",
+                title: message.substring(0, 30) + (message.length > 30 ? "..." : ""),
                 messages: [],
             });
         }
@@ -98,11 +104,13 @@ exports.sendMessage = async (req, res) => {
         }
 
         // Generate response using Gemini (with history context) using helper with retries
-        // Ensure history rules: 
+        // Ensure history rules:
         // 1. Roles must be 'user' or 'model'.
         // 2. No empty parts.
+        // 3. Windowed — long chats would otherwise blow the context limit.
         const history = chat.messages
             .slice(0, -1) // Exclude the *current* message we just added
+            .slice(-20)
             .map((msg) => ({
                 role: msg.role === "user" ? "user" : "model",
                 parts: [{ text: msg.content || " " }], // Fallback for empty content
@@ -167,12 +175,8 @@ exports.generateMindmap = async (req, res) => {
             throw new Error("GEMINI_API_KEY is missing");
         }
 
-        // Lazy load - use current working model
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const model = genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
-
         const { chatId } = req.body;
-        const chat = await Chat.findById(chatId);
+        const chat = await Chat.findOne({ _id: chatId, user: req.user._id });
         if (!chat) return res.status(404).json({ message: "Chat not found" });
 
         // Combine messages for context
@@ -197,8 +201,8 @@ exports.generateMindmap = async (req, res) => {
         
         Return ONLY the mermaid code block.`;
 
-        const result = await model.generateContent(prompt);
-        const text = result.response.text();
+        const result = await geminiHelper.generateContentWithRetry(prompt);
+        const text = geminiHelper.getText(result);
         // Clean code block formatting if present
         const cleanCode = text.replace(/```mermaid/g, "").replace(/```/g, "").trim();
 

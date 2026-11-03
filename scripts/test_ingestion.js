@@ -1,11 +1,11 @@
 const mongoose = require("mongoose");
 const fs = require("fs");
 const dotenv = require("dotenv");
-const Chunk = require("./models/Chunk");
-const File = require("./models/File");
-const DataLoader = require("./utils/dataLoader");
-const Chunker = require("./utils/chunker");
-const geminiHelper = require("./utils/geminiHelper");
+const Chunk = require("../models/Chunk");
+const File = require("../models/File");
+const DataLoader = require("../utils/dataLoader");
+const Chunker = require("../utils/chunker");
+const geminiHelper = require("../utils/geminiHelper");
 
 dotenv.config();
 

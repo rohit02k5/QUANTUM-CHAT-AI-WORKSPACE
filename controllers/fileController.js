@@ -109,11 +109,35 @@ exports.getUserFiles = async (req, res) => {
 exports.searchFiles = async (req, res) => {
     try {
         const { query } = req.query;
+        if (!query || typeof query !== "string") {
+            return res.status(400).json({ message: "Query is required" });
+        }
+        const escaped = query.slice(0, 200).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         const files = await File.find({
             user: req.user._id,
-            originalName: { $regex: query, $options: "i" },
+            originalName: { $regex: escaped, $options: "i" },
         });
         res.status(200).json({ results: files });
+    } catch (err) {
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// View/Download a file — authenticated, ownership-checked replacement for
+// the old public /uploads static route.
+exports.viewFile = async (req, res) => {
+    try {
+        const file = await File.findOne({ _id: req.params.fileId, user: req.user._id });
+        if (!file) return res.status(404).json({ message: "File not found" });
+
+        const fs = require("fs");
+        const path = require("path");
+        const absPath = path.resolve(file.path);
+        if (!fs.existsSync(absPath)) return res.status(404).json({ message: "File no longer exists on disk" });
+
+        res.setHeader("Content-Type", file.mimetype || "application/octet-stream");
+        res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(file.originalName)}"`);
+        fs.createReadStream(absPath).pipe(res);
     } catch (err) {
         res.status(500).json({ message: "Server Error" });
     }

@@ -37,7 +37,10 @@ passport.use(
 
                 // If user exists with same email but no googleId, merge them?
                 // Simple approach: Check email
-                const userWithEmail = await User.findOne({ email: profile.emails[0].value });
+                const email = profile.emails && profile.emails[0] ? profile.emails[0].value : null;
+                if (!email) return done(new Error("Google account has no accessible email"), null);
+
+                const userWithEmail = await User.findOne({ email });
                 if (userWithEmail) {
                     userWithEmail.googleId = profile.id;
                     await userWithEmail.save();
@@ -47,7 +50,7 @@ passport.use(
                 // Create new user
                 const newUser = await User.create({
                     username: profile.displayName,
-                    email: profile.emails[0].value,
+                    email: email,
                     googleId: profile.id,
                     // No password for OAuth users
                 });
@@ -77,8 +80,12 @@ passport.use(
                     return done(null, existingUser);
                 }
 
-                // GitHub might not expose email publicly; handle gracefully or require permission
-                const email = profile.emails && profile.emails[0] ? profile.emails[0].value : `${profile.username}@github.com`;
+                // GitHub might not expose email publicly. Never fabricate a real-looking
+                // address (user@github.com) — it could collide with another account's
+                // email and silently merge. Use a guaranteed-unique placeholder instead.
+                const email = profile.emails && profile.emails[0]
+                    ? profile.emails[0].value
+                    : `${profile.id}@github.oauth.local`;
 
                 const userWithEmail = await User.findOne({ email: email });
                 if (userWithEmail) {

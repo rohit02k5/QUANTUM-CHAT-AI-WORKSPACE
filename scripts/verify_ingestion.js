@@ -6,15 +6,15 @@ const mongoose = require("mongoose");
 const fs = require("fs");
 const path = require("path");
 const dotenv = require("dotenv");
-const File = require("./models/File");
-const Chunk = require("./models/Chunk");
-const DataLoader = require("./utils/dataLoader");
-const Chunker = require("./utils/chunker");
-const geminiHelper = require("./utils/geminiHelper");
+const File = require("../models/File");
+const Chunk = require("../models/Chunk");
+const DataLoader = require("../utils/dataLoader");
+const Chunker = require("../utils/chunker");
+const geminiHelper = require("../utils/geminiHelper");
 
 dotenv.config();
 
-const SAMPLE_FILE = "./sample_document.txt";
+const SAMPLE_FILE = "./scripts/sample_document.txt";
 
 // A long-enough sample document so chunking produces MULTIPLE chunks
 const SAMPLE_TEXT = `

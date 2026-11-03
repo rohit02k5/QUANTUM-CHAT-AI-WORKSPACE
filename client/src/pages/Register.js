@@ -35,7 +35,15 @@ const Register = () => {
     setError("");
 
     try {
-      await axios.post("/api/v1/auth/register", { username, email, password });
+      const { data } = await axios.post("/api/v1/auth/register", { username, email, password });
+      // Auto-login on successful registration
+      if (data?.token) {
+        localStorage.setItem("authToken", data.token);
+        if (data.refreshToken) localStorage.setItem("refreshToken", data.refreshToken);
+        toast.success("Account created successfully!");
+        navigate("/");
+        return;
+      }
       toast.success("Account created successfully!");
       navigate("/login");
     } catch (err) {

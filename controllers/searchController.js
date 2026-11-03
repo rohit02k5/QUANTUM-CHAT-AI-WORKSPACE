@@ -5,10 +5,12 @@ const File = require("../models/File");
 exports.globalSearch = async (req, res) => {
     try {
         const { query } = req.query;
-        if (!query) return res.status(400).json({ message: "Query is required" });
+        if (!query || typeof query !== "string") return res.status(400).json({ message: "Query is required" });
 
         const userId = req.user._id;
-        const regex = new RegExp(query, "i");
+        // Escape user input — raw regex from a query string is a ReDoS vector
+        const escaped = query.slice(0, 200).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const regex = new RegExp(escaped, "i");
 
         // Search Files
         const files = await File.find({

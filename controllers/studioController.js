@@ -1,18 +1,15 @@
 const File = require("../models/File");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const geminiHelper = require("../utils/geminiHelper");
 const dotenv = require("dotenv");
 dotenv.config();
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
 // Compare Documents
 exports.compareDocuments = async (req, res) => {
     try {
         const { fileIds } = req.body; // Expecting array of file IDs
-        if (!fileIds || fileIds.length < 2) return res.status(400).json({ message: "Provide at least 2 file IDs" });
+        if (!Array.isArray(fileIds) || fileIds.length < 2) return res.status(400).json({ message: "Provide at least 2 file IDs" });
 
-        const files = await File.find({ _id: { $in: fileIds } });
+        const files = await File.find({ _id: { $in: fileIds }, user: req.user._id });
         if (files.length !== fileIds.length) return res.status(404).json({ message: "Some files not found" });
 
         const texts = files.map((f, i) => `Document ${i + 1} (${f.originalName}):\n${f.content}`).join("\n\n");
@@ -27,10 +24,8 @@ exports.compareDocuments = async (req, res) => {
         
         Return JSON format: { "similarities": [], "differences": [], "keyInsights": "" }`;
 
-        const result = await model.generateContent(prompt);
-        let responseText = result.response.text();
-
-        console.log("[DEBUG] Raw Gemini Response (Compare):", responseText);
+        const result = await geminiHelper.generateContentWithRetry(prompt);
+        let responseText = geminiHelper.getText(result);
 
         // Clean JSON formatting
         responseText = responseText.replace(/```json/g, "").replace(/```/g, "").trim();
@@ -59,7 +54,7 @@ exports.compareDocuments = async (req, res) => {
 exports.generateFlashcards = async (req, res) => {
     try {
         const { fileId, topic } = req.body;
-        const file = await File.findById(fileId);
+        const file = await File.findOne({ _id: fileId, user: req.user._id });
         if (!file) return res.status(404).json({ message: "File not found" });
 
         const prompt = `Generate 5 study flashcards based on the following text. 
@@ -70,10 +65,8 @@ exports.generateFlashcards = async (req, res) => {
         
         Return STRICT JSON format: [ { "q": "Question?", "a": "Answer" }, ... ]`;
 
-        const result = await model.generateContent(prompt);
-        let responseText = result.response.text();
-
-        console.log("[DEBUG] Raw Gemini Response (Flashcards):", responseText);
+        const result = await geminiHelper.generateContentWithRetry(prompt);
+        let responseText = geminiHelper.getText(result);
 
         responseText = responseText.replace(/```json/g, "").replace(/```/g, "").trim();
 
@@ -84,8 +77,6 @@ exports.generateFlashcards = async (req, res) => {
             console.error("JSON Parse Error:", e);
             flashcards = [{ q: "Error parsing AI response", a: "Please try again." }];
         }
-
-        res.status(200).json({ flashcards });
 
         res.status(200).json({ flashcards });
     } catch (err) {

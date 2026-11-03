@@ -31,6 +31,7 @@ userSchema.pre("save", async function (next) {
 // Method to compare provided password with the hashed password
 userSchema.methods.matchPassword = async function (password) {
   try {
+    if (!this.password) return false; // OAuth-only accounts have no password
     return await bcrypt.compare(password, this.password);
   } catch (err) {
     console.error("Error comparing passwords:", err);
@@ -47,7 +48,6 @@ userSchema.methods.getSignedToken = function (res) {
       process.env.JWT_ACCESS_SECRET,
       { expiresIn: process.env.JWT_ACCESS_EXPIREIN }
     );
-    console.log("JWT Sign Result:", accessToken); // Debug Log
 
     // Generate refresh token
     const refreshToken = jwt.sign(
@@ -58,13 +58,13 @@ userSchema.methods.getSignedToken = function (res) {
 
     // Set refresh token in cookies with secure options
     res.cookie("refreshToken", refreshToken, {
-      maxAge: 86400 * 7000, // Example expiration (adjust as needed)
+      maxAge: 15 * 24 * 60 * 60 * 1000, // 15 days, matches JWT_REFRESH_EXPIREIN
       httpOnly: true,
       secure: process.env.NODE_ENV === "production", // Ensure secure cookies in production
-      sameSite: "strict",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
     });
 
-    return accessToken; // Return the access token
+    return { accessToken, refreshToken };
   } catch (err) {
     console.error("Error generating tokens:", err);
     throw new Error("Token generation failed.");

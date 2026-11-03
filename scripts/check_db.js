@@ -1,8 +1,8 @@
 const mongoose = require("mongoose");
 const dotenv = require("dotenv");
-const Chat = require("./models/Chat");
-const User = require("./models/userModel");
-const File = require("./models/File");
+const Chat = require("../models/Chat");
+const User = require("../models/userModel");
+const File = require("../models/File");
 
 dotenv.config();
 

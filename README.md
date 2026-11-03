@@ -260,20 +260,25 @@ MongoDB Atlas (docs + vector index)
 ---
 ## Local Setup
 ```text
-git clone https://github.com/harshita-sl/Quantum-AI-Workspace.git
-cd Quantum-AI-Workspace
+git clone https://github.com/rohit02k5/QUANTUM-CHAT-AI-WORKSPACE.git
+cd QUANTUM-CHAT-AI-WORKSPACE
+```
+
+Environment
+```text
+cp .env.example .env   # then fill in your values (Mongo URI, Gemini key, OAuth, SMTP, JWT secrets)
 ```
 
 Backend
 ```text
 npm install
-npm run server
+npm run server   # http://localhost:8080
 ```
 Frontend
 ```text
 cd client
 npm install
-npm start
+npm start        # http://localhost:3000 (proxies /api → :8080)
 ```
 Deployment Ready
 Quantum is production-ready and designed for deployment on platforms like Render or Vercel.

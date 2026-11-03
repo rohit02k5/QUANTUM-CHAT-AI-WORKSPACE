@@ -34,8 +34,13 @@ const Login = () => {
     const token = params.get("token");
     if (token && token !== "undefined" && token !== "null") {
       localStorage.setItem("authToken", token); // Default to local for OAuth
+      const rt = params.get("rt");
+      if (rt && rt !== "undefined" && rt !== "null") {
+        localStorage.setItem("refreshToken", rt);
+      }
       toast.success("Successfully logged in via Social!");
-      toast.success("Successfully logged in via Social!");
+      // Strip the token from the URL so it doesn't linger in history
+      window.history.replaceState({}, document.title, window.location.pathname);
       navigate("/");
     }
   }, [navigate]);
@@ -56,10 +61,10 @@ const Login = () => {
         throw new Error("Invalid response from server");
       }
 
-      if (rememberMe) {
-        localStorage.setItem("authToken", authToken);
-      } else {
-        sessionStorage.setItem("authToken", authToken);
+      const store = rememberMe ? localStorage : sessionStorage;
+      store.setItem("authToken", authToken);
+      if (response.data?.refreshToken) {
+        store.setItem("refreshToken", response.data.refreshToken);
       }
 
       toast.success("Welcome back!");
@@ -82,7 +87,7 @@ const Login = () => {
   // OAuth Handlers (Direct Links)
   const API_URL = process.env.REACT_APP_API_URL || (process.env.NODE_ENV === "production"
     ? "https://quantum-chat-backend.onrender.com"
-    : "http://localhost:8080");
+    : "http://localhost:8080").replace(/\/$/, "");
 
   const handleGoogleLogin = () => {
     window.location.href = `${API_URL}/api/v1/auth/google`;

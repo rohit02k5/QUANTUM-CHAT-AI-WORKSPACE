@@ -1,6 +1,7 @@
 const nodemailer = require("nodemailer");
 
 const sendEmail = async (options) => {
+    const isProd = process.env.NODE_ENV === "production";
     const transporter = nodemailer.createTransport({
         host: "smtp.gmail.com",
         port: 587,
@@ -9,8 +10,8 @@ const sendEmail = async (options) => {
             user: process.env.SMTP_EMAIL,
             pass: process.env.SMTP_PASSWORD,
         },
-        logger: true,
-        debug: true,
+        logger: !isProd,
+        debug: !isProd, // debug mode logs SMTP traffic incl. auth details — dev only
         connectionTimeout: 60000, // Increased to 60 seconds
         greetingTimeout: 30000,   // 30 seconds
         socketTimeout: 60000,     // 60 seconds

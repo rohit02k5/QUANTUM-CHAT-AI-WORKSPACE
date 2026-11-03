@@ -7,6 +7,9 @@ router.post('/register', registerController)
 router.post('/login', loginController)
 router.post('/logout', logoutController)
 
+// --- Token Refresh ---
+router.post("/refresh", require("../controllers/authController").refreshController);
+
 // --- Google OAuth ---
 router.get("/google", passport.authenticate("google", { scope: ["profile", "email"] }));
 
@@ -15,11 +18,10 @@ router.get(
     passport.authenticate("google", { session: false, failureRedirect: "/login" }),
     (req, res) => {
         // Generate Token
-        const token = req.user.getSignedToken(res);
-        console.log("Google OAuth Token Generated:", token); // Debug Log
+        const { accessToken, refreshToken } = req.user.getSignedToken(res);
         // Redirect to Frontend with Token
         const clientURL = process.env.CLIENT_URL || "http://localhost:3000";
-        res.redirect(`${clientURL}/login?token=${token}`);
+        res.redirect(`${clientURL}/login?token=${accessToken}&rt=${refreshToken}`);
     }
 );
 
@@ -30,9 +32,9 @@ router.get(
     "/github/callback",
     passport.authenticate("github", { session: false, failureRedirect: "/login" }),
     (req, res) => {
-        const token = req.user.getSignedToken(res);
+        const { accessToken, refreshToken } = req.user.getSignedToken(res);
         const clientURL = process.env.CLIENT_URL || "http://localhost:3000";
-        res.redirect(`${clientURL}/login?token=${token}`);
+        res.redirect(`${clientURL}/login?token=${accessToken}&rt=${refreshToken}`);
     }
 );
 

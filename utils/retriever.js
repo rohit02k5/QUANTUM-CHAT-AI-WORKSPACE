@@ -24,7 +24,7 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = []) {
     const userObjectId =
         userId instanceof mongoose.Types.ObjectId ? userId : new mongoose.Types.ObjectId(userId);
     const fileObjectIds = (fileIds || [])
-        .filter(Boolean)
+        .filter((id) => id && (id instanceof mongoose.Types.ObjectId || mongoose.Types.ObjectId.isValid(id)))
         .map((id) => (id instanceof mongoose.Types.ObjectId ? id : new mongoose.Types.ObjectId(id)));
 
     // 1. Embed the query

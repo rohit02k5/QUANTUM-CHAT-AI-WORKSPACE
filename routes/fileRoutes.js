@@ -1,6 +1,6 @@
 const express = require("express");
 const multer = require("multer");
-const { uploadFile, getUserFiles, searchFiles, deleteFile } = require("../controllers/fileController");
+const { uploadFile, getUserFiles, searchFiles, deleteFile, viewFile } = require("../controllers/fileController");
 const { requireSignIn } = require("../middlewares/authMiddleware");
 
 const router = express.Router();
@@ -64,6 +64,7 @@ const uploadSingle = (req, res, next) => {
 router.post("/upload", uploadSingle, uploadFile);
 router.get("/list", getUserFiles);
 router.get("/search", searchFiles);
+router.get("/:fileId/view", viewFile);
 router.delete("/:fileId", deleteFile);
 
 module.exports = router;

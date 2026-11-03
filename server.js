@@ -5,6 +5,7 @@ const cors = require("cors");
 const bodyParser = require("body-parser");
 const colors = require("colors");
 const morgan = require("morgan");
+const rateLimit = require("express-rate-limit");
 const connectDB = require("./config/db");
 const mongoose = require("mongoose");
 const authRoutes = require('./routes/authRoute');
@@ -13,10 +14,13 @@ const authRoutes = require('./routes/authRoute');
 if (!process.env.JWT_ACCESS_SECRET || !process.env.JWT_REFRESH_SECRET || !process.env.JWT_ACCESS_EXPIREIN || !process.env.JWT_REFRESH_EXPIREIN) {
   console.error("FATAL ERROR: One of the JWT secrets or expiration variables is missing.".red.bold);
   console.error("Required: JWT_ACCESS_SECRET, JWT_REFRESH_SECRET, JWT_ACCESS_EXPIREIN, JWT_REFRESH_EXPIREIN");
-  // We don't exit process here to allow other parts to run for debugging, but this explains the 500 error
+  process.exit(1);
+}
+if (!process.env.MONGO_URI) {
+  console.error("FATAL ERROR: MONGO_URI is missing.".red.bold);
+  process.exit(1);
 }
 
-const openaiRoutes = require("./routes/openaiRoutes");
 const errorHandler = require("./middlewares/errorMiddleware");
 
 const helmet = require('helmet');
@@ -48,27 +52,57 @@ mongoose.connection.once("open", async () => {
     }
     require("./controllers/fileController").cleanupTempFiles();
 });
+
 app.use(
-  helmet.contentSecurityPolicy({
-    directives: {
-      defaultSrc: ["'self'"],
-      fontSrc: ["'self'", "data:"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        fontSrc: ["'self'", "data:"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrc: ["'self'"],
+      },
     },
+    crossOriginResourcePolicy: { policy: "cross-origin" }, // frontend lives on another origin
   })
 );
+
+const allowedOrigins = [
+  "http://localhost:3000",
+  "https://quantum-chat-frontend.onrender.com",
+];
+if (process.env.CLIENT_URL) allowedOrigins.push(process.env.CLIENT_URL);
+
 app.use(cors({
-  origin: [
-    "http://localhost:3000",
-    "https://quantum-chat-frontend.onrender.com"
-  ],
+  origin: (origin, cb) => {
+    // Allow same-origin/no-origin calls (curl, Render health checks, proxies)
+    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error("Not allowed by CORS"));
+  },
   credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 app.use(bodyParser.urlencoded({ extended: true }));
-app.use(morgan("dev"));
-app.use(errorHandler);
+app.use(require("cookie-parser")());
+if (process.env.NODE_ENV !== "production") {
+  app.use(morgan("dev"));
+}
+
+// Rate limiting
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 50,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many attempts, please try again later" },
+});
+const aiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "AI rate limit exceeded, please slow down" },
+});
 
 // Root Route for checking status
 app.get("/", (req, res) => {
@@ -79,12 +113,11 @@ app.get("/", (req, res) => {
 app.get("/api/v1/search", require("./middlewares/authMiddleware").requireSignIn, require("./controllers/searchController").globalSearch);
 
 const PORT = process.env.PORT || 8080;
-app.use("/api/v1/auth", authRoutes);
-app.use("/api/v1/openai", require("./routes/openaiRoutes"));
-app.use("/api/v1/chat", require("./routes/chatRoutes"));
+app.use("/api/v1/auth", authLimiter, authRoutes);
+app.use("/api/v1/openai", aiLimiter, require("./routes/openaiRoutes"));
+app.use("/api/v1/chat", aiLimiter, require("./routes/chatRoutes"));
 app.use("/api/v1/files", require("./routes/fileRoutes"));
-app.use("/api/v1/studio", require("./routes/studioRoutes")); // Studio Routes
-app.use("/uploads", express.static("uploads")); // Serve uploaded files
+app.use("/api/v1/studio", aiLimiter, require("./routes/studioRoutes")); // Studio Routes
 app.use(errorHandler);
 app.listen(PORT, () => {
   console.log(`Server Running in ${process.env.DEV_MODE} on ${PORT}`.bgCyan.white);
