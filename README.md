@@ -12,6 +12,7 @@
 It is designed as a **single unified workspace** where users can:
 
 - Converse intelligently with AI  
+- **Chat with their own documents** via a full **RAG (Retrieval-Augmented Generation)** pipeline  
 - Analyze documents and content deeply  
 - Visualize knowledge and insights in **2D & 3D**  
 - Generate executive summaries and strategies  
@@ -32,6 +33,7 @@ This project demonstrates **real-world system design, AI orchestration, security
 ## Why Quantum Stands Out
 
 - End-to-end **MERN Stack** architecture  
+- Full **RAG pipeline** — embeddings, vector search, and grounded chat over your own files  
 - Multiple **AI systems orchestrated together**  
 - Secure **OAuth + JWT hybrid authentication**  
 - Advanced **3D knowledge graphs & analytics**  
@@ -78,6 +80,30 @@ Quantum is built with a **security-first architecture**, clearly demonstrated by
 
 ### Unique Feature
 - **One-click conversion of conversations into structured mind maps** using **Mermaid.js**, enabling visual understanding of complex topics.
+
+---
+
+## RAG Engine — Chat With Your Documents
+
+> Ask questions and get answers **grounded in your own files**, powered by a full Retrieval-Augmented Generation pipeline.
+
+### Ingestion Pipeline
+- Upload **PDF / DOCX / TXT / MD / CSV / JSON** files  
+- Documents are parsed into structured `Document` objects with metadata (`utils/dataLoader.js`)  
+- **Recursive text chunking** (1000 chars, 200 overlap) preserves context across chunk boundaries (`utils/chunker.js`)  
+- Each chunk is embedded with **Gemini Embedding (3072-dim)** and stored in a `chunks` collection  
+
+### Retrieval
+- Queries are embedded and matched against your indexed chunks (`utils/retriever.js`)  
+- **MongoDB Atlas `$vectorSearch`** as the primary path (auto-created index)  
+- **Local cosine-similarity fallback** — works on any MongoDB, no Atlas required  
+- Similarity threshold (`RAG_MIN_SCORE`) filters out irrelevant context  
+
+### Chat Integration
+- Retrieval runs **automatically** when you have indexed documents — just ask  
+- Scope answers to **specific documents** via the Knowledge Base picker (`documentIds`)  
+- **Temporary attachments** (`saveToKB: false`) are never indexed and are deleted after the message  
+- Tunable via env vars: `RAG_TOP_K`, `RAG_MIN_SCORE`, `MAX_ATTACH_CHARS`  
 
 ---
 
@@ -142,6 +168,8 @@ This demonstrates:
 
 ### Features
 - Stores uploaded files & insights  
+- Files are **automatically indexed for RAG** on upload (chunked + embedded)  
+- Select specific documents to **scope chat retrieval** to just those sources  
 - Global search across workspace  
 - Acts as long-term AI memory  
 - Enables reuse of past intelligence  
@@ -165,6 +193,8 @@ This demonstrates:
 | Function | Technology |
 |--------|------------|
 | Conversational AI | Google Gemini Pro |
+| Embeddings & RAG | Gemini Embedding + MongoDB Atlas Vector Search |
+| Document Parsing | pdf-parse, Mammoth (DOCX) |
 | Image Generation | Hugging Face (Stable Diffusion) |
 | NLP & Analysis | Natural, Sentiment.js |
 | Knowledge Graphs | Plotly.js (3D) |
@@ -220,16 +250,18 @@ This demonstrates:
 Frontend (React)
    ↓
 Backend (Express API)
-   ↓
-AI Services (Gemini, Hugging Face)
-   ↓
-MongoDB Atlas
+   ↓                    ↘
+AI Services      RAG Pipeline
+(Gemini,         (Loader → Chunker →
+Hugging Face)     Embedder → Retriever)
+   ↓                    ↙
+MongoDB Atlas (docs + vector index)
 ```
 ---
 ## Local Setup
 ```text
-git clone https://github.com/rohit02k5/QUANTUM-CHAT-AI.git
-cd QUANTUM-CHAT-AI
+git clone https://github.com/harshita-sl/Quantum-AI-Workspace.git
+cd Quantum-AI-Workspace
 ```
 
 Backend
@@ -276,12 +308,16 @@ Screenshots demonstrate authentication flows, AI chat, document intelligence, 3D
 <img width="1874" height="894" alt="Screenshot 2025-12-12 233108" src="https://github.com/user-attachments/assets/82246672-5c9e-4e7d-abd3-67cc5e95fd93" />
 <img width="1914" height="900" alt="Screenshot 2025-12-12 233308" src="https://github.com/user-attachments/assets/934328b2-8c45-4782-ba0e-eac66e388b70" />
 
-Author
+Authors
 
-Swarna Venkata Sai Rohit
+**Swarna Venkata Sai Rohit** — Original Creator
 B.Tech Electrical Engineering — IIT Bhilai
 Full-Stack & AI Systems Engineer
 
 GitHub: https://github.com/rohit02k5
 Linkedin: https://www.linkedin.com/in/svs-rohit-baa147283
 Email: rohitiitbh@gmail.com
+
+**Harshita** — Co-Author (RAG pipeline, document intelligence & workspace features)
+
+GitHub: https://github.com/harshita-sl
