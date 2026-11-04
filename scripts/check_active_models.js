@@ -1,35 +1,29 @@
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { GoogleGenAI } = require("@google/genai");
 const dotenv = require("dotenv");
 dotenv.config();
 
 const modelsToTest = [
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-exp",
-    "gemini-1.5-flash",
-    "gemini-2.5-flash",
-    "gemini-pro",
-    "gemini-1.5-pro",
+    process.env.GEMINI_MODEL || "gemini-2.5-flash",
+    ...(process.env.GEMINI_FALLBACK_MODELS || "gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.6-flash").split(","),
 ];
 
 async function testModels() {
     console.log("--- Testing Models for Connectivity ---");
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
     for (const modelName of modelsToTest) {
         try {
             process.stdout.write(`Testing ${modelName}... `);
-            const model = genAI.getGenerativeModel({ model: modelName });
-            const result = await model.generateContent("Hello?");
-            const response = await result.response;
-            const text = response.text();
+            const result = await ai.models.generateContent({ model: modelName, contents: "Hello?" });
+            const text = result.text;
 
             if (text) {
-                console.log("✅ SUCCESS");
+                console.log("SUCCESS");
                 console.log(`>>> WINNER: ${modelName} is working.`);
                 return; // Stop at the first working model
             }
         } catch (error) {
-            console.log(`❌ FAILED (${error.status || 'Error'}: ${error.message.split('[')[0].substring(0, 50)}...)`);
+            console.log(`FAILED (${error.status || "Error"}: ${(error.message || "").substring(0, 80)}...)`);
         }
     }
     console.log("--- End of Test ---");

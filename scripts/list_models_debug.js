@@ -1,32 +1,21 @@
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { GoogleGenAI } = require("@google/genai");
 const dotenv = require("dotenv");
 const fs = require("fs");
 dotenv.config();
 
 async function listModels() {
     try {
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        // Note: getGenerativeModel doesn't list models, explicitly using the API would be better
-        // But the SDK doesn't expose listModels helper directly on the main class in all versions.
-        // Let's use fetch directly to be sure.
-
-        const apiKey = process.env.GEMINI_API_KEY;
-        const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
-
-        const response = await fetch(url);
-        const data = await response.json();
-
-        if (data.models) {
-            const names = data.models.map(m => m.name).join("\n");
-            fs.writeFileSync("models_output.txt", names);
-            console.log("Models written to models_output.txt");
+        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        const pager = await ai.models.list({ config: { pageSize: 200 } });
+        const names = (pager.page || []).map((m) => m.name).join("\n");
+        if (names) {
+            fs.writeFileSync("scripts/models_output.txt", names);
+            console.log("Models written to scripts/models_output.txt");
         } else {
-            console.log("No models found or error:", JSON.stringify(data));
+            console.log("No models found");
         }
-
     } catch (error) {
-        console.error("Error:", error);
+        console.error("Error:", error.message);
     }
 }
 

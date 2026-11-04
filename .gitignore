@@ -25,3 +25,6 @@ tmp/
 .vscode/
 .idea/
 .DS_Store
+
+# Eval reports (generated per-run; baseline.json is committed)
+evals/reports/

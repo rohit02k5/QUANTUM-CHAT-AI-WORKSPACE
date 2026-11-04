@@ -1,0 +1,40 @@
+Quantum AI Intelligence Suite — Internal Product Specification (v1.4)
+
+Overview
+Quantum is a unified AI workspace. Its purpose is to let a user ingest
+documents, ask questions grounded in those documents, and convert the
+answers into artifacts (summaries, flashcards, action plans, charts).
+
+Core modules
+1. Chat — streaming conversational interface with persistent history.
+2. Knowledge Base — a per-user library of uploaded documents. Supported
+   upload types: PDF, DOCX, TXT, Markdown, CSV, and JSON. Maximum upload
+   size is 10 MB. Files flagged "temporary" are deleted after 24 hours.
+3. RAG pipeline — documents are split into overlapping chunks of 1000
+   characters with 200 characters of overlap, embedded, and retrieved by
+   cosine similarity over a vector index. Retrieval returns the top 3
+   chunks by default (RAG_TOP_K) and drops matches scoring below 0.5.
+4. Studio — compares two or three documents side by side and generates
+   flashcards from a single document.
+5. Executive Assistant — produces an executive summary, action items,
+   strategic gaps, and key risks as structured output.
+6. Insight Engine — extracts entities, relationships, topics, a sentiment
+   timeline, and SEO metrics from arbitrary text.
+
+Security model
+- All API routes except register, login, and OAuth callbacks require a
+  valid JWT access token. Access tokens expire after 24 hours; refresh
+  tokens after 15 days.
+- Every database query that touches user data is scoped by the
+  authenticated user's id. Cross-user access returns 404, not 403.
+- Rate limits: 50 requests per 15 minutes on authentication routes and
+  100 requests per 15 minutes on AI routes.
+- Uploaded files are never served over a public path; they are streamed
+  through an authenticated, ownership-checked endpoint.
+
+Operational notes
+- The embedding model is gemini-embedding-2 configured at 768 dimensions.
+  Chunks store the model name and dimension count so stale embeddings can
+  be detected and re-embedded.
+- The chat model defaults to gemini-2.5-flash with ordered fallbacks.
+- Ingestion currently embeds chunks in batches of 5 concurrent calls.

@@ -18,7 +18,11 @@ This file contains high-signal information for agents working on the Quantum AI 
 - **Backend Authentication**: Uses JWT (Access/Refresh tokens) with `httpOnly` cookies and `passport.js` for OAuth (Google/GitHub).
 
 ## Testing
-- There are no formal tests configured in the current `package.json` scripts (`"test": "echo \"Error: no test specified\" && exit 1"`).
+- `npm test` runs the Vitest suite (`tests/`) — Vitest + Supertest + mongodb-memory-server, fully offline. Vitest `globals: true` is on; test files are CommonJS and must NOT `require("vitest")`.
+- `GEMINI_MOCK=1` swaps in `utils/geminiMock.js` (deterministic seeded embeddings + canned generation); `tests/setup.js` enables it automatically.
+- Tests import `app.js` (Express app only); `server.js` does bootstrap (connect, vector-index creation, temp-file sweep, listen).
+- CI: `.github/workflows/ci.yml` runs backend tests + client build on PRs (Node 24).
+- Eval harness: `node scripts/eval.js --memory` runs the real RAG path on `evals/fixtures` + `evals/golden/questions.json`, writes `evals/reports/`, and fails on regression vs `evals/baseline.json` (`EVAL_REGRESSION_THRESHOLD`, default 0.10). Costs real Gemini calls — cap with `EVAL_MAX_CALLS`, pace with `EVAL_PACE_MS`.
 - `verify_ingestion.js` and `test_ingestion.js` are standalone end-to-end scripts for the RAG ingestion pipeline (require valid `GEMINI_API_KEY` + `MONGO_URI`).
 
 ## RAG Pipeline
@@ -27,7 +31,8 @@ This file contains high-signal information for agents working on the Quantum AI 
 - Chat: `controllers/chatController.js` `sendMessage` auto-retrieves when the user has indexed docs (`useDocuments:false` disables; `documentIds` scopes retrieval).
 - Temp uploads (`isTemp` / `saveToKB:false`) are never chunked, are deleted after the message, and stale ones are swept at server start.
 - Env knobs: `RAG_TOP_K` (default 3), `RAG_MIN_SCORE` (default 0.5), `MAX_ATTACH_CHARS` (default 12000), `ATLAS_VECTOR_SEARCH_INDEX` (default `chunks_embedding_index`).
-- Model knobs: `GEMINI_MODEL` (default `gemini-2.5-flash`), `GEMINI_FALLBACK_MODELS` (comma list), `GEMINI_EMBEDDING_MODEL` (default `gemini-embedding-2`, 3072 dims).
+- Model knobs: `GEMINI_MODEL` (default `gemini-2.5-flash`), `GEMINI_FALLBACK_MODELS` (comma list), `GEMINI_EMBEDDING_MODEL` (default `gemini-embedding-2`), `EMBEDDING_DIMS` (default 768 — must match the Atlas vector index; changing it requires `node scripts/reembed.js`).
+- Chunks store `embeddingModel` + `embeddingDims`; the retriever ignores chunks that don't match the active embedding config.
 
 ## Security Notes
 - All `/api/v1/*` routes except auth register/login/OAuth are behind `requireSignIn`.

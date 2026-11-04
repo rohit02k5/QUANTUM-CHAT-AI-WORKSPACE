@@ -27,7 +27,7 @@ async function embedChunksBatched(chunkDocs, userId, fileId) {
         const results = await Promise.all(
             batch.map(async (cd) => {
                 try {
-                    const embedding = await geminiHelper.getEmbedding(cd.pageContent);
+                    const embedding = await geminiHelper.getEmbedding(cd.pageContent, { task: "document" });
                     await Chunk.create({
                         user: userId,
                         file: fileId,
@@ -35,6 +35,8 @@ async function embedChunksBatched(chunkDocs, userId, fileId) {
                         pageContent: cd.pageContent,
                         metadata: cd.metadata,
                         embedding,
+                        embeddingModel: process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2",
+                        embeddingDims: embedding.length,
                     });
                     return true;
                 } catch (err) {

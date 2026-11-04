@@ -258,6 +258,58 @@ Hugging Face)     Embedder → Retriever)
 MongoDB Atlas (docs + vector index)
 ```
 ---
+## Quality, Testing & Observability
+
+Quantum treats RAG quality as a *measured* property, not a hope.
+
+### Tests
+```text
+npm test          # Vitest + Supertest + in-memory MongoDB — fully offline
+npm run test:watch
+```
+Covers auth flows (register/refresh/reject), cross-user ownership isolation,
+chunker behavior, the retriever's cosine fallback when Atlas `$vectorSearch`
+is unavailable, and file-stream privacy. A deterministic Gemini mock
+(`GEMINI_MOCK=1`) means CI needs no API key. GitHub Actions runs tests on
+every PR and builds the client.
+
+### Health & usage
+- `GET /health` — `{status, uptimeSec, version, db:{ok,latencyMs}, vectorIndex, models}`; 503 when the DB is down.
+- Every Gemini call writes a `UsageEvent` (kind, model, tokens, latency, requestId) — see `GET /api/v1/usage/me` and the Usage panel on the dashboard.
+- Structured logs via pino with `x-request-id` correlation end to end.
+
+### RAG eval harness
+```text
+npm run eval              # against MONGO_URI (or EVAL_MONGO_URI)
+node scripts/eval.js --memory   # fully self-contained (in-memory DB)
+```
+Runs the real retrieval + generation path against `evals/fixtures/` and
+`evals/golden/questions.json` (including unanswerable and prompt-injection
+cases), scoring **hit@k, MRR, faithfulness, relevance, fact coverage,
+abstention accuracy, and injection-safety**. Reports land in
+`evals/reports/`; the run fails if a metric regresses more than
+`EVAL_REGRESSION_THRESHOLD` vs `evals/baseline.json`.
+
+| metric | baseline (Phase 0) |
+|---|---|
+| hit@k | **0.95** |
+| MRR | **0.89** |
+| faithfulness | **0.86** |
+| relevance | **0.95** |
+| fact coverage | **0.91** |
+| abstention accuracy | 0.75 |
+| injection-safe | 0.50 — known gap; source-delimiter guardrails land in Phase 1 |
+| mean latency | 6.9s |
+
+### Re-embedding migration
+If `EMBEDDING_DIMS` or `GEMINI_EMBEDDING_MODEL` ever changes, existing chunks
+must be re-embedded (the retriever ignores mismatched-dimension vectors):
+```text
+node scripts/reembed.js --dry-run   # preview what would be re-embedded
+node scripts/reembed.js             # batched, resumable, idempotent
+```
+
+---
 ## Local Setup
 ```text
 git clone https://github.com/rohit02k5/QUANTUM-CHAT-AI-WORKSPACE.git
