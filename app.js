@@ -64,10 +64,11 @@ const authLimiter = rateLimit({
 });
 const aiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: parseInt(process.env.AI_RATE_MAX || "100", 10),
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => process.env.NODE_ENV === "test",
+  // Disabled in tests unless TEST_RATE_LIMIT=1 (see tests/ratelimit.test.js)
+  skip: () => process.env.NODE_ENV === "test" && process.env.TEST_RATE_LIMIT !== "1",
   message: { message: "AI rate limit exceeded, please slow down" },
 });
 
@@ -88,6 +89,7 @@ app.use("/api/v1/chat", aiLimiter, require("./routes/chatRoutes"));
 app.use("/api/v1/files", require("./routes/fileRoutes"));
 app.use("/api/v1/studio", aiLimiter, require("./routes/studioRoutes")); // Studio Routes
 app.use("/api/v1/usage", require("./routes/usageRoutes"));
+app.use("/api/v1/personas", require("./routes/personaRoutes"));
 
 app.use(errorHandler);
 

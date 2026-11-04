@@ -49,3 +49,82 @@ One short entry per phase: what was built, why, tradeoffs, and free-tier implica
 - Route prefix stays `/api/v1/...` (repo convention), not `/api/...`.
 - The dashboard usage panel lives on `Homepage.js` and renders only when data exists.
 - `node` version in CI is 24 to match production.
+
+---
+
+## Phase 1 — Streaming Chat + Guardrails + Chat QoL
+
+**Goal:** token-by-token answers, and sources that can't hijack the model.
+
+### SSE streaming (`POST /api/v1/chat/:chatId/stream`)
+- `:chatId` may be `"new"` — a fresh chat is created then (the spec only
+  defined the existing-chat case; sendMessage already accepted an optional
+  chatId, so this keeps both paths symmetric).
+- Events are single-line JSON: `data: {"type":"meta|token|done|error", ...}`.
+  Chosen over named `event:` fields because the client parses each `data:`
+  block uniformly — same information, simpler code.
+- `meta` (sources + requestId + chatId) goes out before the first token so
+  the UI can show citations immediately; `: ping` every 15s defeats idle
+  timeouts on Render's proxy.
+- **Client disconnect** is detected via `res` "close" (more reliable than
+  `req` "close" once a response is streaming), the upstream call is aborted
+  via AbortSignal, and the partial answer is persisted with
+  `truncated: true` — reload shows exactly what the user saw, marked
+  "partial answer".
+- **Model fallback on stream:** the helper pulls the *first* chunk eagerly —
+  a model is only skipped when it fails before producing anything, so a
+  mid-stream failure is never silently duplicated by retrying on another
+  model.
+- Non-stream `POST /message` is untouched and is the client's automatic
+  fallback when the stream can't start (network, old server, etc.).
+- Shared context prep (retrieval, attachment excerpt, persona, system
+  instruction) is one function used by both endpoints — the two paths
+  cannot drift.
+- **Tradeoff:** streaming bypasses express's JSON path entirely; there's no
+  compression middleware in the app, so nothing needed disabling.
+- **Free-tier:** SSE on Render works fine; heartbeats + `X-Accel-Buffering:
+  no` are the only infra needs. No Redis, no workers.
+
+### Prompt-injection guardrails (`utils/guard.js`)
+- Every retrieved chunk and attachment is wrapped in
+  `<source id file page>` tags; delimiter-like sequences *inside* the text
+  (`</source>`, `[SYSTEM...`, `=== BANNER ===`, im_start tags) are
+  neutralized before wrapping, so injected content can't escape its cell.
+- A heuristic detector (~15 regexes: instruction-override phrases, fake
+  system/admin markers, role-switch, exfiltration) **flags** a chunk but
+  never drops it — flagged sources are still data and render with a small
+  warning marker on the citation chip. Silent dropping would hide evidence
+  and break "why did it say that" debugging.
+- `GUARDRAIL_RULES` is always the **last** block of the system instruction
+  (persona text prepends before it) — later instructions win, so this makes
+  guardrails structurally authoritative. Adversarial personas cannot
+  reorder them.
+- Same wrapper used in the non-stream path, the stream path, and the eval
+  script — the eval measures what users actually get.
+- **Measured result:** injection-safe went 0.50 → see `evals/baseline.json`
+  (the Phase 0 baseline had the model echoing an injected fake "system
+  notice" when asked for its prompt).
+
+### Chat QoL
+- **Auto-title:** after the first exchange, a fire-and-forget call on the
+  *cheapest* configured model rewrites the truncated-message title. If it
+  fails, the truncated title stays — zero cost, zero latency impact.
+- `Chat` gained `pinned`, `tags`, `personaKey`/`personaId`;
+  `PATCH /api/v1/chat/:id` validates and is owner-scoped. `getUserChats`
+  sorts pinned-first (additive).
+- **Personas:** presets in `config/personas.js` + `Persona` model
+  (name, systemPrompt ≤2000 chars, per-user unique name, 20/user cap).
+  `GET/POST/PATCH/DELETE /api/v1/personas`; deleting a persona detaches it
+  from chats.
+- Sidebar: pinned section + tag-filter chips; header: inline title edit +
+  pin; composer: persona Select; source chips show `flagged` warning.
+
+### Deviations from spec
+- Stream endpoint is `/api/v1/chat/:chatId/stream` (`/api/v1` convention);
+  `:chatId = "new"` starts a fresh chat.
+- Rate-limit test uses `TEST_RATE_LIMIT=1` + `AI_RATE_MAX` env knobs rather
+  than firing 101 requests in CI.
+- `res` "close" (not `req`) drives the abort path — verified by a real
+  socket test that destroys the connection mid-stream.
+- No persona create/edit UI — the composer picker covers selection; CRUD is
+  API-complete and documented.

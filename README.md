@@ -74,6 +74,9 @@ Quantum is built with a **security-first architecture**, clearly demonstrated by
 
 ### Capabilities
 - Context-retaining multi-turn conversations  
+- **Token-by-token streaming** over SSE (`POST /api/v1/chat/:chatId/stream`) with a Stop button — aborted answers persist as *partial* so history is never inconsistent; falls back automatically to the classic endpoint  
+- **Personas** — built-in presets (Analyst, Tutor, Code Reviewer, Executive Briefer) plus custom ones via `/api/v1/personas`; applied per chat but can never override the injection guardrails  
+- **Chat organization** — pinned chats, tags + tag filtering, inline-renamable titles, and auto-generated titles on the cheapest model  
 - Coding help, explanations, reasoning, and creativity  
 - Chat history persisted in **MongoDB**  
 - File-aware intelligence (chat with documents)  
@@ -91,7 +94,7 @@ Quantum is built with a **security-first architecture**, clearly demonstrated by
 - Upload **PDF / DOCX / TXT / MD / CSV / JSON** files  
 - Documents are parsed into structured `Document` objects with metadata (`utils/dataLoader.js`)  
 - **Recursive text chunking** (1000 chars, 200 overlap) preserves context across chunk boundaries (`utils/chunker.js`)  
-- Each chunk is embedded with **Gemini Embedding (3072-dim)** and stored in a `chunks` collection  
+- Each chunk is embedded with **Gemini Embedding** (`EMBEDDING_DIMS`, 768 by default) and stored in a `chunks` collection — dimension/model metadata is tracked per chunk so stale vectors are detected, not crashed on  
 
 ### Retrieval
 - Queries are embedded and matched against your indexed chunks (`utils/retriever.js`)  
@@ -290,16 +293,24 @@ abstention accuracy, and injection-safety**. Reports land in
 `evals/reports/`; the run fails if a metric regresses more than
 `EVAL_REGRESSION_THRESHOLD` vs `evals/baseline.json`.
 
-| metric | baseline (Phase 0) |
-|---|---|
-| hit@k | **0.95** |
-| MRR | **0.89** |
-| faithfulness | **0.86** |
-| relevance | **0.95** |
-| fact coverage | **0.91** |
-| abstention accuracy | 0.75 |
-| injection-safe | 0.50 — known gap; source-delimiter guardrails land in Phase 1 |
-| mean latency | 6.9s |
+| metric | Phase 0 (no guardrails) | Phase 1 (guardrails on) |
+|---|---|---|
+| hit@k | 0.95 | **0.95** |
+| MRR | 0.89 | **0.93** |
+| faithfulness | 0.86 | **0.98** |
+| relevance | 0.95 | **1.00** |
+| fact coverage | 0.91 | **1.00** |
+| abstention accuracy | 0.75 | **1.00** |
+| injection-safe | 0.50 | **1.00** |
+| mean latency | 6.9s | 14.9s* |
+
+*includes free-tier 429 back-off during the run; not regression-gated.
+
+Guardrails (Phase 1): every retrieved chunk/attachment is wrapped in
+`<source>` delimiters, delimiter-like text inside sources is neutralized,
+instruction-like content is flagged (shown on the citation chip, never
+obeyed), and the guardrail block is the last — authoritative — part of the
+system instruction so personas can't override it.
 
 ### Re-embedding migration
 If `EMBEDDING_DIMS` or `GEMINI_EMBEDDING_MODEL` ever changes, existing chunks

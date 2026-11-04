@@ -92,7 +92,8 @@ async function main() {
     const Chunk = require("../models/Chunk");
     const DataLoader = require("../utils/dataLoader");
     const { recursiveSplitChunks } = require("../utils/chunker");
-    const { retrieveChunks, buildContext } = require("../utils/retriever");
+    const { retrieveChunks } = require("../utils/retriever");
+    const guard = require("../utils/guard");
     const geminiHelper = require("../utils/geminiHelper");
 
     // --- eval user ---
@@ -146,16 +147,20 @@ async function main() {
         const t0 = Date.now();
         const chunks = await retrieveChunks(userId, q.question, TOP_K).catch(() => []);
         budget();
-        const context = chunks.length ? buildContext(chunks) : "";
-        const prompt = context
-            ? "Answer the user's question using ONLY the provided sources when relevant. " +
-              "If the answer is not in the sources, say so and answer from general knowledge.\n\n" +
-              `=== SOURCES ===\n${context}\n=== END SOURCES ===\n\nQuestion: ${q.question}`
-            : q.question;
+        // Same guard path the real chat controller uses (delimited sources +
+        // guardrail system instruction), so eval measures production behavior.
+        const { context, flags } = chunks.length ? guard.wrapSources(chunks) : { context: "", flags: [] };
+        const prompt = context ? guard.buildRagPrompt(q.question, context) : q.question;
+        const systemInstruction = guard.buildSystemInstruction({});
 
         let answer = "";
         try {
-            const res = await geminiHelper.generateContentWithRetry(prompt, {}, 2, "chat");
+            const res = await geminiHelper.generateContentWithRetry(
+                prompt,
+                { systemInstruction },
+                2,
+                "chat"
+            );
             answer = geminiHelper.getText(res) || "";
         } catch (e) {
             answer = `[GENERATION_FAILED: ${e.message}]`;

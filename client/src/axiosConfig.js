@@ -5,6 +5,7 @@ const baseURL = (process.env.REACT_APP_API_URL || (process.env.NODE_ENV === "pro
   : "http://localhost:8080")).trim();
 
 const instance = axios.create({ baseURL, withCredentials: true });
+instance.baseURL = baseURL;
 
 const getStorage = () =>
   localStorage.getItem("authToken") ? localStorage : sessionStorage;

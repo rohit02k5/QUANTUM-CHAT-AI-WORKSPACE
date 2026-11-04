@@ -132,29 +132,81 @@ class GeminiHelper {
     }
 
     /**
-     * Streaming generation. Returns the SDK async-iterable stream; caller
-     * forwards chunks as they arrive. Usage recorded on stream completion.
+     * Streaming generation. Returns an async-iterable of SDK chunks; caller
+     * forwards text as it arrives. Tries each configured model in turn —
+     * a model is skipped only if it fails BEFORE producing its first chunk.
+     * Usage recorded on completion/failure. Pass an AbortSignal to cancel.
      */
-    async generateContentStream(prompt, config = {}, kind = "chat") {
+    async generateContentStream(prompt, config = {}, kind = "chat", signal = null) {
+        const models = [this.modelName, ...this.fallbackModels];
         if (this._mock) return this._mock.generateStream(prompt, config);
         const start = Date.now();
-        const stream = await this.ai.models.generateContentStream({
-            model: this.modelName,
-            contents: prompt,
-            config,
-        });
-        const model = this.modelName;
-        return (async function* () {
+        let lastError;
+
+        for (const model of models) {
+            if (signal?.aborted) break;
             try {
-                for await (const chunk of stream) {
-                    yield chunk;
-                }
-                recordUsage({ kind, model, latencyMs: Date.now() - start, ok: true });
+                const stream = await this.ai.models.generateContentStream({
+                    model,
+                    contents: prompt,
+                    config: { ...config, abortSignal: signal || undefined },
+                });
+                // Pull the first chunk eagerly: any failure before it is a
+                // "failed to start" and we fall through to the next model.
+                const it = stream[Symbol.asyncIterator]();
+                const first = await it.next();
+                return (async function* () {
+                    try {
+                        if (!first.done) yield first.value;
+                        for await (const chunk of { [Symbol.asyncIterator]: () => it }) {
+                            yield chunk;
+                        }
+                        recordUsage({ kind, model, latencyMs: Date.now() - start, ok: true });
+                    } catch (error) {
+                        recordUsage({ kind, model, latencyMs: Date.now() - start, ok: false, errorCode: error.status || error.message });
+                        throw error;
+                    }
+                })();
             } catch (error) {
+                lastError = error;
                 recordUsage({ kind, model, latencyMs: Date.now() - start, ok: false, errorCode: error.status || error.message });
-                throw error;
+                logger.warn({ model, status: error.status, err: error.message }, "[GeminiHelper] stream failed to start, trying next model");
             }
-        })();
+        }
+        logger.error({ err: lastError?.message }, "[GeminiHelper] All models failed to stream");
+        throw lastError;
+    }
+
+    /**
+     * Chat variant of the stream — formats history + prompt like
+     * generateChatWithRetry so both paths send identical contents.
+     */
+    async generateChatStream(history, prompt, config = {}, signal = null) {
+        const historyText = (history || [])
+            .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.parts?.[0]?.text || ""}`)
+            .join("\n");
+        const fullPrompt = historyText
+            ? `${historyText}\n\nUser: ${prompt}\nAssistant:`
+            : `User: ${prompt}\nAssistant:`;
+        return this.generateContentStream(fullPrompt, config, "chat", signal);
+    }
+
+    /**
+     * Single-shot generation on the cheapest configured model (used for
+     * background work like auto-titles). No fallback chain — cheap by design.
+     */
+    async generateCheapest(prompt, config = {}, kind = "chat") {
+        if (this._mock) return this._mock.generate(prompt, config);
+        const model = this.fallbackModels[this.fallbackModels.length - 1] || this.modelName;
+        const start = Date.now();
+        try {
+            const result = await this.ai.models.generateContent({ model, contents: prompt, config });
+            recordUsage({ kind, model, latencyMs: Date.now() - start, ok: true, usageMetadata: result.usageMetadata });
+            return result;
+        } catch (error) {
+            recordUsage({ kind, model, latencyMs: Date.now() - start, ok: false, errorCode: error.status || error.message });
+            throw error;
+        }
     }
 
     // Helper to get text from a generateContent response (new SDK: .text getter)

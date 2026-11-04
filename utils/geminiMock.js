@@ -72,6 +72,8 @@ function generate(prompt, config = {}) {
 async function* generateStream(prompt, config) {
     const res = await generate(prompt, config);
     for (const word of String(res.text).split(" ")) {
+        // Pacing delay so tests can abort mid-stream realistically
+        await new Promise((r) => setTimeout(r, 200));
         yield { text: word + " " };
     }
 }

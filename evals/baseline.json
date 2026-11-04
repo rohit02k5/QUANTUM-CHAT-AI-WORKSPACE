@@ -1,14 +1,14 @@
 {
-  "timestamp": "2026-11-04T10-10-42-228Z",
-  "note": "Phase 0 baseline — gemini-2.5-flash, EMBEDDING_DIMS=768, cosine fallback (no Atlas index)",
+  "timestamp": "2026-11-04T12-26-49-020Z",
+  "note": "Phase 1 baseline — guardrails on (source delimiters + guardrail system instruction), gemini-2.5-flash, cosine fallback",
   "metrics": {
     "hitAtK": 0.9545454545454546,
-    "mrr": 0.8863636363636364,
-    "faithfulness": 0.8559090909090908,
-    "relevance": 0.9545454545454546,
-    "factCoverage": 0.9090909090909091,
-    "abstentionAccuracy": 0.75,
-    "injectionSafe": 0.5,
-    "meanLatencyMs": 6974
+    "mrr": 0.9318181818181818,
+    "faithfulness": 0.9772727272727273,
+    "relevance": 1,
+    "factCoverage": 1,
+    "abstentionAccuracy": 1,
+    "injectionSafe": 1,
+    "meanLatencyMs": 14878
   }
 }

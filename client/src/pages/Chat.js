@@ -1,10 +1,15 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Box, Typography, TextField, IconButton, Paper, Avatar, Tooltip, CircularProgress, Button, Menu, MenuItem, Checkbox, ListItemText } from "@mui/material";
+import { Box, Typography, TextField, IconButton, Paper, Avatar, Tooltip, CircularProgress, Button, Menu, MenuItem, Checkbox, ListItemText, Select, FormControl, InputLabel } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import SendIcon from "@mui/icons-material/Send";
+import StopIcon from "@mui/icons-material/Stop";
+import PushPinIcon from "@mui/icons-material/PushPin";
+import PushPinOutlinedIcon from "@mui/icons-material/PushPinOutlined";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
+import ReportProblemIcon from "@mui/icons-material/ReportProblem";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome"; // For Mindmap
 import axios from "../axiosConfig";
+import { streamChat } from "../utils/streamChat";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { atomDark } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -106,7 +111,7 @@ const Mermaid = ({ chart }) => {
     );
 };
 
-const MessageBubble = ({ role, content, sources }) => {
+const MessageBubble = ({ role, content, sources, truncated }) => {
     const theme = useTheme();
     const isUser = role === "user";
 
@@ -176,6 +181,9 @@ const MessageBubble = ({ role, content, sources }) => {
                         {content}
                     </ReactMarkdown>
                 )}
+                {truncated && (
+                    <Chip size="small" label="partial answer" color="warning" variant="outlined" sx={{ mb: 1 }} />
+                )}
                 {sources && sources.length > 0 && (
                     <Box sx={{ mt: 2 }}>
                         <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
@@ -185,10 +193,12 @@ const MessageBubble = ({ role, content, sources }) => {
                             <Chip
                                 key={idx}
                                 size="small"
-                                label={`${s.originalName} • ${(s.score * 100).toFixed(1)}%`}
+                                label={`${s.originalName}${s.page ? ` p.${s.page}` : ""} • ${((s.score || 0) * 100).toFixed(1)}%`}
                                 variant="outlined"
+                                color={s.flagged ? "warning" : "default"}
+                                icon={s.flagged ? <ReportProblemIcon sx={{ fontSize: 14 }} /> : undefined}
                                 sx={{ mr: 0.5, mb: 0.5 }}
-                                title={s.snippet || s.originalName}
+                                title={s.flagged ? "This source contains instruction-like text (treated as data only)" : (s.snippet || s.originalName)}
                             />
                         ))}
                     </Box>
@@ -216,12 +226,25 @@ const Chat = () => {
     const [documents, setDocuments] = useState([]); // User's indexed KB files
     const [selectedDocIds, setSelectedDocIds] = useState([]); // Empty = search all docs
     const [docMenuAnchor, setDocMenuAnchor] = useState(null);
+    // Streaming state
+    const [streaming, setStreaming] = useState(false);
+    const streamAbortRef = useRef(null);
+    const streamAccRef = useRef("");
+    const streamFlushScheduled = useRef(false);
+    // Personas + chat meta
+    const [presets, setPresets] = useState([]);
+    const [customPersonas, setCustomPersonas] = useState([]);
+    const [activeChat, setActiveChat] = useState(null); // {title,pinned,tags,personaKey,personaId}
+    const [tagFilter, setTagFilter] = useState(null);
+    const [editingTitle, setEditingTitle] = useState(false);
+    const [titleDraft, setTitleDraft] = useState("");
     const fileInputRef = useRef(null);
     const bottomRef = useRef(null);
 
     useEffect(() => {
         loadChatHistory();
         loadDocs();
+        loadPersonas();
     }, []);
 
     useEffect(() => {
@@ -250,12 +273,29 @@ const Chat = () => {
         }
     };
 
+    const loadPersonas = async () => {
+        try {
+            const { data } = await axios.get("/api/v1/personas");
+            setPresets(data.presets || []);
+            setCustomPersonas(data.personas || []);
+        } catch {
+            /* persona list is optional — ignore */
+        }
+    };
+
     const loadChatSession = async (id) => {
         setChatId(id);
         setLoading(true);
         try {
             const { data } = await axios.get(`/api/v1/chat/${id}`);
             setMessages(data.chat.messages);
+            setActiveChat({
+                title: data.chat.title,
+                pinned: data.chat.pinned,
+                tags: data.chat.tags || [],
+                personaKey: data.chat.personaKey,
+                personaId: data.chat.personaId,
+            });
         } catch (error) {
             toast.error("Failed to load chat");
         } finally {
@@ -264,9 +304,41 @@ const Chat = () => {
     };
 
     const startNewChat = () => {
+        streamAbortRef.current?.abort();
         setChatId(null);
+        setActiveChat(null);
         setMessages([]);
         setInput("");
+    };
+
+    const patchChat = async (fields) => {
+        if (!chatId) return;
+        try {
+            const { data } = await axios.patch(`/api/v1/chat/${chatId}`, fields);
+            setActiveChat((prev) => ({
+                ...(prev || {}),
+                title: data.chat.title,
+                pinned: data.chat.pinned,
+                tags: data.chat.tags || [],
+                personaKey: data.chat.personaKey,
+                personaId: data.chat.personaId,
+            }));
+            loadChatHistory();
+        } catch {
+            toast.error("Update failed");
+        }
+    };
+
+    const saveTitle = async () => {
+        setEditingTitle(false);
+        if (titleDraft.trim() && titleDraft !== activeChat?.title) {
+            await patchChat({ title: titleDraft.trim() });
+        }
+    };
+
+    const togglePin = (chat, e) => {
+        e.stopPropagation();
+        axios.patch(`/api/v1/chat/${chat._id}`, { pinned: !chat.pinned }).then(loadChatHistory);
     };
 
     const deleteChat = async (id, e) => {
@@ -310,13 +382,22 @@ const Chat = () => {
 
     const clearFile = () => setSelectedFile(null);
 
+    // Fallback: the original non-streaming endpoint (used when the stream
+    // fails before delivering any events).
+    const sendNonStream = async (body) => {
+        const { data } = await axios.post("/api/v1/chat/message", body);
+        setMessages((prev) => [...prev, { role: "model", content: data.response, sources: data.sources }]);
+        if (!chatId) {
+            setChatId(data.chatId);
+            loadChatHistory();
+        }
+    };
+
     const handleSend = async () => {
         if (!input.trim() && !selectedFile) return;
 
         const userContent = selectedFile ? `${input}\n[Attached: ${selectedFile.name}]` : input;
-        const userMessage = { role: "user", content: userContent };
-
-        setMessages((prev) => [...prev, userMessage]);
+        setMessages((prev) => [...prev, { role: "user", content: userContent }]);
 
         const msgToSend = input;
         const fileToSend = selectedFile?.id;
@@ -324,28 +405,108 @@ const Chat = () => {
         setSelectedFile(null);
         setLoading(true);
 
+        const body = {
+            message: msgToSend,
+            fileId: fileToSend,
+            useDocuments,
+            documentIds: selectedDocIds,
+        };
+
+        const controller = new AbortController();
+        streamAbortRef.current = controller;
+        setStreaming(true);
+
+        let acc = "";
+        let sources = null;
+        let newChatId = chatId;
+        let sawToken = false;
+        let streamFailed = false;
+        streamAccRef.current = "";
+
+        // Batch token renders: accumulate text, flush once per animation frame
+        const scheduleFlush = () => {
+            if (streamFlushScheduled.current) return;
+            streamFlushScheduled.current = true;
+            requestAnimationFrame(() => {
+                streamFlushScheduled.current = false;
+                const text = acc;
+                setMessages((prev) => {
+                    const copy = [...prev];
+                    copy[copy.length - 1] = { role: "model", content: text, sources };
+                    return copy;
+                });
+            });
+        };
+
         try {
-            const { data } = await axios.post("/api/v1/chat/message", {
-                message: msgToSend,
+            const result = await streamChat({
                 chatId,
-                fileId: fileToSend,
-                useDocuments,
-                documentIds: selectedDocIds,
+                body,
+                signal: controller.signal,
+                onEvent: (evt) => {
+                    if (evt.type === "meta") {
+                        sources = evt.sources || null;
+                        newChatId = evt.chatId || newChatId;
+                        setMessages((prev) => [...prev, { role: "model", content: "", sources }]);
+                        setLoading(false);
+                    } else if (evt.type === "token") {
+                        sawToken = true;
+                        acc += evt.text;
+                        streamAccRef.current = acc;
+                        scheduleFlush();
+                    } else if (evt.type === "done") {
+                        newChatId = evt.chatId || newChatId;
+                    } else if (evt.type === "error") {
+                        streamFailed = true;
+                    }
+                },
             });
 
-            setMessages((prev) => [...prev, { role: "model", content: data.response, sources: data.sources }]);
+            const wasAborted = controller.signal.aborted || result.aborted;
 
-            // If it was a new chat, update ID and reload history to show it in sidebar
-            if (!chatId) {
-                setChatId(data.chatId);
-                loadChatHistory();
+            // Final synchronous flush so no token is lost to a pending rAF
+            if (sawToken) {
+                setMessages((prev) => {
+                    const copy = [...prev];
+                    copy[copy.length - 1] = { role: "model", content: acc, sources, truncated: wasAborted || streamFailed };
+                    return copy;
+                });
             }
+
+            if (!sawToken && (result.refused || streamFailed || !result.ok)) {
+                // Stream failed before producing output — fall back silently
+                setMessages((prev) => prev.filter((m) => !(m.role === "model" && m.content === "")));
+                await sendNonStream(body);
+                return;
+            }
+
+            if (newChatId && newChatId !== chatId) setChatId(newChatId);
+            if (!chatId || streamFailed) loadChatHistory();
         } catch (error) {
-            toast.error("Failed to send message");
+            // Unexpected client-side failure — try the non-stream path once
+            if (!sawToken) {
+                try {
+                    await sendNonStream(body);
+                    return;
+                } catch {
+                    /* fall through to toast */
+                }
+            }
+            setMessages((prev) => {
+                const copy = [...prev];
+                const last = copy[copy.length - 1];
+                if (last?.role === "model") copy[copy.length - 1] = { ...last, truncated: true };
+                return copy;
+            });
+            toast.error("Stream interrupted — partial answer saved");
         } finally {
             setLoading(false);
+            setStreaming(false);
+            streamAbortRef.current = null;
         }
     };
+
+    const handleStop = () => streamAbortRef.current?.abort();
 
     const handleKeyPress = (e) => {
         if (e.key === "Enter" && !e.shiftKey) {
@@ -374,29 +535,73 @@ const Chat = () => {
                     + New Chat
                 </Button>
                 <Typography variant="overline" color="text.secondary" sx={{ mb: 1 }}>Recent Chats</Typography>
+                {/* Tag filter */}
+                {[...new Set(chatHistory.flatMap((c) => c.tags || []))].length > 0 && (
+                    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mb: 1 }}>
+                        {[...new Set(chatHistory.flatMap((c) => c.tags || []))].map((t) => (
+                            <Chip
+                                key={t}
+                                size="small"
+                                label={t}
+                                variant={tagFilter === t ? "filled" : "outlined"}
+                                color={tagFilter === t ? "primary" : "default"}
+                                onClick={() => setTagFilter(tagFilter === t ? null : t)}
+                            />
+                        ))}
+                    </Box>
+                )}
                 <Box sx={{ flexGrow: 1, overflowY: "auto" }}>
-                    {chatHistory.map((chat) => (
-                        <Box
-                            key={chat._id}
-                            onClick={() => loadChatSession(chat._id)}
-                            sx={{
-                                p: 1.5,
-                                mb: 1,
-                                borderRadius: "8px",
-                                cursor: "pointer",
-                                bgcolor: chatId === chat._id ? theme.palette.action.selected : "transparent",
-                                "&:hover": { bgcolor: theme.palette.action.hover },
-                                display: "flex",
-                                justifyContent: "space-between",
-                                alignItems: "center"
-                            }}
-                        >
-                            <Typography variant="body2" noWrap sx={{ maxWidth: 180 }}>{chat.title}</Typography>
-                            <IconButton size="small" onClick={(e) => deleteChat(chat._id, e)}>
-                                <DeleteIcon fontSize="small" />
-                            </IconButton>
-                        </Box>
-                    ))}
+                    {(() => {
+                        const visible = chatHistory.filter((c) => !tagFilter || (c.tags || []).includes(tagFilter));
+                        const pinned = visible.filter((c) => c.pinned);
+                        const rest = visible.filter((c) => !c.pinned);
+                        const renderChat = (chat) => (
+                            <Box
+                                key={chat._id}
+                                onClick={() => loadChatSession(chat._id)}
+                                sx={{
+                                    p: 1.5,
+                                    mb: 1,
+                                    borderRadius: "8px",
+                                    cursor: "pointer",
+                                    bgcolor: chatId === chat._id ? theme.palette.action.selected : "transparent",
+                                    "&:hover": { bgcolor: theme.palette.action.hover },
+                                    display: "flex",
+                                    justifyContent: "space-between",
+                                    alignItems: "center"
+                                }}
+                            >
+                                <Box sx={{ minWidth: 0 }}>
+                                    <Typography variant="body2" noWrap sx={{ maxWidth: 160 }}>{chat.title}</Typography>
+                                    {(chat.tags || []).length > 0 && (
+                                        <Typography variant="caption" color="text.secondary" noWrap>
+                                            {chat.tags.join(", ")}
+                                        </Typography>
+                                    )}
+                                </Box>
+                                <Box sx={{ display: "flex", flexShrink: 0 }}>
+                                    <IconButton size="small" onClick={(e) => togglePin(chat, e)}>
+                                        {chat.pinned ? <PushPinIcon fontSize="small" color="primary" /> : <PushPinOutlinedIcon fontSize="small" />}
+                                    </IconButton>
+                                    <IconButton size="small" onClick={(e) => deleteChat(chat._id, e)}>
+                                        <DeleteIcon fontSize="small" />
+                                    </IconButton>
+                                </Box>
+                            </Box>
+                        );
+                        return (
+                            <>
+                                {pinned.length > 0 && (
+                                    <>
+                                        <Typography variant="caption" color="text.secondary" sx={{ pl: 0.5 }}>Pinned</Typography>
+                                        {pinned.map(renderChat)}
+                                        <Typography variant="caption" color="text.secondary" sx={{ pl: 0.5 }}>All chats</Typography>
+                                    </>
+                                )}
+                                {rest.map(renderChat)}
+                            </>
+                        );
+                    })()}
                 </Box>
             </Paper>
 
@@ -412,7 +617,45 @@ const Chat = () => {
                     }}>
                         Quantum Chat
                     </Typography>
-                    <Button
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                        {/* Editable chat title (active conversation) */}
+                        {chatId && activeChat && (
+                            editingTitle ? (
+                                <TextField
+                                    size="small"
+                                    value={titleDraft}
+                                    autoFocus
+                                    onChange={(e) => setTitleDraft(e.target.value)}
+                                    onBlur={saveTitle}
+                                    onKeyDown={(e) => { if (e.key === "Enter") saveTitle(); if (e.key === "Escape") setEditingTitle(false); }}
+                                    sx={{ width: 200 }}
+                                />
+                            ) : (
+                                <Tooltip title="Click to rename">
+                                    <Typography
+                                        variant="subtitle1"
+                                        onClick={() => { setTitleDraft(activeChat.title || ""); setEditingTitle(true); }}
+                                        sx={{ cursor: "text", borderBottom: "1px dashed", borderColor: "divider" }}
+                                        noWrap
+                                    >
+                                        {activeChat.title}
+                                    </Typography>
+                                </Tooltip>
+                            )
+                        )}
+                        {chatId && (
+                            <Tooltip title={activeChat?.pinned ? "Unpin" : "Pin chat"}>
+                                <IconButton size="small" onClick={() => patchChat({ pinned: !activeChat?.pinned })}>
+                                    {activeChat?.pinned ? <PushPinIcon color="primary" /> : <PushPinOutlinedIcon />}
+                                </IconButton>
+                            </Tooltip>
+                        )}
+                        <Button
+                        variant="outlined"
+                        startIcon={<AutoAwesomeIcon />}
+                        onClick={generateMindmap}
+                        disabled={!chatId || loading}
+                        sx={{ borderRadius: "12px", textTransform: "none", borderColor: theme.palette.divider }}
                         variant="outlined"
                         startIcon={<AutoAwesomeIcon />}
                         onClick={generateMindmap}
@@ -421,6 +664,7 @@ const Chat = () => {
                     >
                         Visualize
                     </Button>
+                    </Box>
                 </Box>
 
                 {/* Messages Area */}
@@ -432,7 +676,7 @@ const Chat = () => {
                             </Box>
                         )}
                         {messages.map((msg, index) => (
-                            <MessageBubble key={index} role={msg.role} content={msg.content} sources={msg.sources} />
+                            <MessageBubble key={index} role={msg.role} content={msg.content} sources={msg.sources} truncated={msg.truncated} />
                         ))}
                         {loading && (
                             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -454,6 +698,28 @@ const Chat = () => {
                     )}
                 </Box>
                 <Paper component="form" sx={{ p: "2px 4px", display: "flex", alignItems: "center", borderRadius: "24px", bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}`, boxShadow: "0px 4px 20px rgba(0,0,0,0.1)" }}>
+                    {/* Persona picker */}
+                    {(presets.length > 0 || customPersonas.length > 0) && (
+                        <FormControl size="small" sx={{ minWidth: 110, ml: 1 }}>
+                            <Select
+                                value={activeChat?.personaKey || activeChat?.personaId || ""}
+                                displayEmpty
+                                onChange={(e) => chatId && patchChat({ persona: e.target.value || null })}
+                                disabled={!chatId}
+                                variant="standard"
+                                disableUnderline
+                                sx={{ fontSize: "0.8rem" }}
+                            >
+                                <MenuItem value=""><em>Default</em></MenuItem>
+                                {presets.map((p) => (
+                                    <MenuItem key={p.key} value={p.key}>{p.name}</MenuItem>
+                                ))}
+                                {customPersonas.map((p) => (
+                                    <MenuItem key={p._id} value={p._id}>{p.name}</MenuItem>
+                                ))}
+                            </Select>
+                        </FormControl>
+                    )}
                     <input type="file" hidden ref={fileInputRef} onChange={handleFileSelect} accept=".pdf,.txt,.docx,.md,.csv,.json" />
                     <IconButton sx={{ p: "10px" }} aria-label="attach" onClick={() => fileInputRef.current.click()} disabled={uploading}>
                         {uploading ? <CircularProgress size={24} /> : <AttachFileIcon />}
@@ -513,9 +779,17 @@ const Chat = () => {
                         multiline
                         maxRows={4}
                     />
-                    <IconButton sx={{ p: "10px", color: theme.palette.primary.main }} onClick={handleSend} disabled={(!input.trim() && !selectedFile) || loading || uploading}>
-                        <SendIcon />
-                    </IconButton>
+                    {streaming ? (
+                        <Tooltip title="Stop generating">
+                            <IconButton sx={{ p: "10px", color: theme.palette.error.main }} onClick={handleStop}>
+                                <StopIcon />
+                            </IconButton>
+                        </Tooltip>
+                    ) : (
+                        <IconButton sx={{ p: "10px", color: theme.palette.primary.main }} onClick={handleSend} disabled={(!input.trim() && !selectedFile) || loading || uploading}>
+                            <SendIcon />
+                        </IconButton>
+                    )}
                 </Paper>
             </Box>
         </Box>

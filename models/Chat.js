@@ -10,6 +10,17 @@ const chatSchema = new mongoose.Schema({
         type: String,
         default: "New Chat",
     },
+    pinned: {
+        type: Boolean,
+        default: false,
+    },
+    tags: {
+        type: [String],
+        default: [],
+    },
+    // Either a preset key (config/personas.js) or a Persona _id — never both.
+    personaKey: { type: String, default: null },
+    personaId: { type: mongoose.Schema.Types.ObjectId, ref: "Persona", default: null },
     messages: [
         {
             role: {
@@ -26,8 +37,11 @@ const chatSchema = new mongoose.Schema({
                     originalName: String,
                     score: Number,
                     snippet: String,
+                    page: Number,
+                    flagged: Boolean, // source contained instruction-like text (shown as data only)
                 },
             ],
+            truncated: { type: Boolean, default: false }, // stream was aborted mid-answer
             timestamp: {
                 type: Date,
                 default: Date.now,
