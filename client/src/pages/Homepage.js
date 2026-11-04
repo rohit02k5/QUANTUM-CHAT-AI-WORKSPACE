@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Typography, Grid, Card, CardContent, useTheme } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import api from '../axiosConfig';
 
 // Icons
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
@@ -79,6 +80,56 @@ const FeatureCard = ({ title, description, icon, onClick, delay, gradient }) => 
           }}>
             LAUNCH <RocketLaunchIcon sx={{ fontSize: 14 }} />
           </Typography>
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+};
+
+// Small 30-day Gemini usage summary (tokens, calls, latency) for the signed-in user.
+const UsagePanel = () => {
+  const theme = useTheme();
+  const [usage, setUsage] = React.useState(null);
+
+  React.useEffect(() => {
+    api.get("/api/v1/usage/me").then((res) => setUsage(res.data)).catch(() => setUsage(null));
+  }, []);
+
+  if (!usage || !usage.totalEvents) return null;
+
+  const stats = [
+    { label: "AI calls (30d)", value: usage.totalEvents },
+    { label: "Tokens in", value: (usage.promptTokens || 0).toLocaleString() },
+    { label: "Tokens out", value: (usage.outputTokens || 0).toLocaleString() },
+    { label: "Median latency", value: usage.latency?.p50 ? `${usage.latency.p50}ms` : "—" },
+    { label: "p95 latency", value: usage.latency?.p95 ? `${usage.latency.p95}ms` : "—" },
+    { label: "Failures", value: usage.failures || 0 },
+  ];
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.6, duration: 0.5 }}>
+      <Card sx={{
+        mt: 6, borderRadius: "24px",
+        background: theme.palette.mode === 'dark' ? "rgba(255,255,255,0.03)" : "rgba(255,255,255,0.6)",
+        backdropFilter: "blur(20px)", border: `1px solid ${theme.palette.divider}`,
+      }}>
+        <CardContent sx={{ p: 3 }}>
+          <Typography variant="overline" sx={{ letterSpacing: "0.15em", opacity: 0.7 }}>
+            Your AI usage — last 30 days
+          </Typography>
+          <Grid container spacing={2} sx={{ mt: 1 }}>
+            {stats.map((s) => (
+              <Grid item xs={4} sm={2} key={s.label}>
+                <Typography variant="h6" fontWeight="bold">{s.value}</Typography>
+                <Typography variant="caption" color="text.secondary">{s.label}</Typography>
+              </Grid>
+            ))}
+          </Grid>
+          {usage.byModel && Object.keys(usage.byModel).length > 0 && (
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 1.5, display: "block" }}>
+              Models: {Object.entries(usage.byModel).map(([m, c]) => `${m} ×${c}`).join(", ")}
+            </Typography>
+          )}
         </CardContent>
       </Card>
     </motion.div>
@@ -196,6 +247,8 @@ const Homepage = () => {
           </Grid>
         ))}
       </Grid>
+
+      <UsagePanel />
     </Box>
   );
 };

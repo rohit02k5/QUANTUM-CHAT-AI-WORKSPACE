@@ -2,7 +2,8 @@ const mongoose = require("mongoose");
 const geminiHelper = require("./geminiHelper");
 
 const VECTOR_INDEX = process.env.ATLAS_VECTOR_SEARCH_INDEX || "chunks_embedding_index";
-const EMBEDDING_DIM = 3072; // gemini-embedding-2
+const EMBEDDING_DIM = parseInt(process.env.EMBEDDING_DIMS || "768", 10);
+const EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2";
 const MIN_SCORE = parseFloat(process.env.RAG_MIN_SCORE || "0.5");
 
 /**
@@ -27,10 +28,10 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = []) {
         .filter((id) => id && (id instanceof mongoose.Types.ObjectId || mongoose.Types.ObjectId.isValid(id)))
         .map((id) => (id instanceof mongoose.Types.ObjectId ? id : new mongoose.Types.ObjectId(id)));
 
-    // 1. Embed the query
+    // 1. Embed the query (task-typed for retrieval)
     let queryVector;
     try {
-        queryVector = await geminiHelper.getEmbedding(query);
+        queryVector = await geminiHelper.getEmbedding(query, { task: "query" });
         if (!Array.isArray(queryVector) || queryVector.length !== EMBEDDING_DIM) {
             console.warn("[Retriever] Query embedding dimension mismatch:", queryVector?.length);
             return [];
@@ -43,6 +44,8 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = []) {
     // 2. Try Atlas Vector Search
     const scopeFilter = { user: userObjectId };
     if (fileObjectIds.length > 0) scopeFilter.file = { $in: fileObjectIds };
+    // Only chunks embedded at the active dimensionality are comparable
+    const vectorFilter = { ...scopeFilter, embeddingDims: EMBEDDING_DIM };
 
     try {
         const chunks = await mongoose.connection.collection("chunks").aggregate([
@@ -53,7 +56,7 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = []) {
                     queryVector,
                     numCandidates: Math.max(topK * 10, 20),
                     limit: topK,
-                    filter: scopeFilter,
+                    filter: vectorFilter,
                     similarity: "cosine",
                 },
             },
@@ -77,8 +80,13 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = []) {
         console.warn("[Retriever] Atlas vector search unavailable, using local fallback...");
     }
 
-    // 3. Local fallback: cosine similarity over this user's chunks
-    const allChunks = await mongoose.connection.collection("chunks").find(scopeFilter).toArray();
+    // 3. Local fallback: cosine similarity over this user's chunks.
+    // Only consider chunks embedded with the active dims — stale chunks from
+    // an older embedding config can't be compared.
+    const allChunks = await mongoose.connection.collection("chunks").find({
+        ...scopeFilter,
+        $or: [{ embeddingDims: EMBEDDING_DIM }, { embeddingDims: { $exists: false }, embedding: { $size: EMBEDDING_DIM } }],
+    }).toArray();
     const scored = allChunks
         .map((c) => ({
             ...c,

@@ -1,0 +1,30 @@
+Product Sync Meeting — 14 March 2026
+Attendees: Rohit (engineering), Harshita (AI), Priya (design), Dan (PM)
+
+Agenda: Q2 roadmap for the Quantum workspace.
+
+Decisions
+- We will ship the streaming chat endpoint in week 3 of Q2. Rohit owns
+  the backend; Priya owns the composer UI changes.
+- The RAG embedding dimension drops from 3072 to 768 to cut storage and
+  latency. Harshita validated a 4% recall improvement in offline tests.
+- Studio comparison will be limited to three documents at a time. The
+  "compare four docs" request was postponed to Q3.
+
+Action items
+- Rohit: land the SSE streaming endpoint and abort handling by 10 April.
+- Harshita: run the re-embed migration on staging and publish recall
+  numbers by 4 April.
+- Priya: finalize the citation-chip design with page deep-links by
+  8 April.
+- Dan: draft the pricing page for the "Pro" tier (target: $9/month).
+
+Risks / open questions
+- Render free-tier cold starts add 30-50s latency for the first request
+  after idle. Options: keep-alive ping, paid tier, or accept it.
+- Gemini rate limits on the shared free key caused two user-facing
+  failures last sprint; a per-user quota may be needed.
+- Legal has not confirmed whether meeting transcripts can be retained
+  past 90 days; TTL indexes enforce a 90-day expiry for now.
+
+Next meeting: 21 March 2026, 15:00 IST.

@@ -6,14 +6,17 @@
     "server": "nodemon server.js",
     "start": "node server.js",
     "client": "npm start --prefix ./client",
-    "dev": "concurrently \"npm run server\" \"npm run client\""
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "eval": "node scripts/eval.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "Quantum AI Intelligence Suite — chat, RAG knowledge base, and document studio",
   "dependencies": {
-    "@google/generative-ai": "^0.21.0",
+    "@google/genai": "^2.32.0",
     "bcryptjs": "^2.4.3",
     "body-parser": "^1.20.3",
     "colors": "^1.4.0",
@@ -36,6 +39,12 @@
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
-    "nodemon": "^3.1.9"
+    "mongodb-memory-server": "^11.3.0",
+    "nodemon": "^3.1.9",
+    "pino": "^10.4.0",
+    "pino-http": "^11.0.0",
+    "pino-pretty": "^13.2.0",
+    "supertest": "^7.3.1",
+    "vitest": "^5.1.0"
   }
 }
