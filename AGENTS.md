@@ -34,6 +34,12 @@ This file contains high-signal information for agents working on the Quantum AI 
 - Model knobs: `GEMINI_MODEL` (default `gemini-2.5-flash`), `GEMINI_FALLBACK_MODELS` (comma list), `GEMINI_EMBEDDING_MODEL` (default `gemini-embedding-2`), `EMBEDDING_DIMS` (default 768 — must match the Atlas vector index; changing it requires `node scripts/reembed.js`).
 - Chunks store `embeddingModel` + `embeddingDims`; the retriever ignores chunks that don't match the active embedding config.
 
+## Streaming & Guardrails (Phase 1)
+- `POST /api/v1/chat/:chatId/stream` (`:chatId` may be `"new"`) — SSE events as `data: {"type":"meta|token|done|error"}`. Abort via `res` "close" → partial saved with `truncated:true`.
+- `utils/guard.js` wraps ALL retrieved chunks/attachments in `<source>` tags, neutralizes embedded delimiters, flags instruction-like text (→ `sources[].flagged`), and appends `GUARDRAIL_RULES` LAST in the system instruction (personas can't override). Used by sendMessage, streamMessage, and eval.
+- Personas: presets in `config/personas.js` + `/api/v1/personas` CRUD (owner-scoped); chats get `personaKey|personaId`, `pinned`, `tags` via `PATCH /api/v1/chat/:id`. Auto-title runs on the cheapest fallback model.
+- Rate limiter is env-tunable: `AI_RATE_MAX`; tests enable it with `TEST_RATE_LIMIT=1`.
+
 ## Security Notes
 - All `/api/v1/*` routes except auth register/login/OAuth are behind `requireSignIn`.
 - `/uploads` is NOT served statically — files stream through `GET /api/v1/files/:fileId/view` (ownership-checked).
