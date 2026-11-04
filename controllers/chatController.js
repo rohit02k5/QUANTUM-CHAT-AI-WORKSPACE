@@ -216,6 +216,8 @@ exports.streamMessage = async (req, res) => {
     let finished = false;
     let aborted = false;
     let accumulated = "";
+    let agentTrace = null;
+    const pendingToolCalls = new Map();
     let ping = null;
     const abort = new AbortController();
     const cleanup = () => { if (ping) clearInterval(ping); ping = null; };
@@ -228,6 +230,21 @@ exports.streamMessage = async (req, res) => {
     };
 
     const sendEvent = (obj) => {
+        // Trace tool activity as events stream by — survives abort mid-run
+        if (obj.type === "tool_call") pendingToolCalls.set(obj.id, obj);
+        if (obj.type === "tool_result") {
+            agentTrace = agentTrace || [];
+            const [step, tool] = String(obj.id).split(":");
+            const call = pendingToolCalls.get(obj.id);
+            agentTrace.push({
+                step: Number(step) || undefined,
+                tool,
+                argsPreview: call?.argsPreview,
+                ok: obj.ok,
+                ms: obj.ms,
+                summary: obj.summary,
+            });
+        }
         if (res.writableEnded) return;
         try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* socket gone */ }
     };
@@ -240,6 +257,7 @@ exports.streamMessage = async (req, res) => {
                 role: "model",
                 content: accumulated || "(response stopped before any output)",
                 sources: sources.length ? sources : undefined,
+                trace: agentTrace?.length ? agentTrace : undefined,
                 truncated: !!truncated,
             });
             await chat.save();
@@ -253,7 +271,11 @@ exports.streamMessage = async (req, res) => {
             return res.status(500).json({ message: "GEMINI_API_KEY is missing" });
         }
 
-        let { message, fileId, useDocuments, documentIds } = req.body;
+        let { message, fileId, useDocuments, documentIds, mode, browse } = req.body;
+        const isAgent = mode === "agent";
+        if (isAgent && process.env.FEATURE_AGENT === "false") {
+            return res.status(400).json({ message: "Agent mode is disabled on this deployment" });
+        }
         const chatIdParam = req.params.chatId === "new" ? null : req.params.chatId;
 
         if ((!message || !message.trim()) && fileId) message = "Please analyze the attached file.";
@@ -275,7 +297,12 @@ exports.streamMessage = async (req, res) => {
         const isNewChat = chat.isNew;
 
         chat.messages.push({ role: "user", content: message });
-        const ctx = await prepareMessageContext(userId, chat, message, { useDocuments, documentIds, fileId });
+        // Agent mode does its own retrieval via tools — skip the auto-RAG pass
+        const ctx = await prepareMessageContext(userId, chat, message, {
+            useDocuments: isAgent ? false : useDocuments,
+            documentIds,
+            fileId,
+        });
         sources = ctx.sources;
         await chat.save(); // persist user turn before streaming starts
 
@@ -300,6 +327,47 @@ exports.streamMessage = async (req, res) => {
 
         const history = buildHistory(chat);
         let usage = null;
+
+        if (isAgent) {
+            const { runAgent } = require("../services/agent");
+            const personaPrompt = await resolvePersonaPrompt(chat);
+            const outcome = await runAgent({
+                userId,
+                chatId: chat._id,
+                message,
+                history,
+                personaPrompt,
+                browse: !!browse,
+                emit: sendEvent,
+                signal: abort.signal,
+            });
+            sources = [...outcome.sources, ...outcome.webSources];
+            accumulated = outcome.text || "";
+            usage = outcome.usage;
+            // Emit the final answer as token events — same SSE contract as chat
+            if (!aborted) {
+                for (const piece of accumulated.match(/\S+\s*/g) || []) {
+                    sendEvent({ type: "token", text: piece });
+                }
+            }
+            if (aborted) return;
+            finished = true;
+            await persistAssistant(false);
+            if (isNewChat) autoTitle(chat);
+            sendEvent({
+                type: "done",
+                chatId: chat._id,
+                messageId: chat.messages[chat.messages.length - 1]?._id,
+                truncated: false,
+                usage: usage || undefined,
+                sources: sources.length ? sources : undefined,
+            });
+            cleanup();
+            res.end();
+            if (ctx.tempFileDoc) removeFileArtifacts(ctx.tempFileDoc);
+            return;
+        }
+
         const stream = await geminiHelper.generateChatStream(history, ctx.prompt, { systemInstruction: ctx.systemInstruction }, abort.signal);
 
         for await (const chunk of stream) {

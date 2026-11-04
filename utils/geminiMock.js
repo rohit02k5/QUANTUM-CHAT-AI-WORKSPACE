@@ -47,8 +47,65 @@ function embed(text) {
     return Promise.resolve(out.map((v) => v / n));
 }
 
+/**
+ * Deterministic multi-turn scripting for agent tests.
+ * __setAgentScript([
+ *   {functionCalls: [{name:"search_knowledge_base", args:{query:"x"}}]},
+ *   {functionCalls: [...]},
+ *   {text: "final answer"},
+ * ])
+ * Each generate() call with tools present shifts one turn; a turn with
+ * `functionCalls` returns SDK-shaped functionCall parts, `{text}` returns a
+ * normal text turn. Script exhausted → plain text response.
+ */
+let agentScript = null;
+function __setAgentScript(script) {
+    agentScript = Array.isArray(script) ? script.map((t) => ({ ...t })) : null;
+}
+
+const isGoogleSearchCall = (config) =>
+    Array.isArray(config?.tools) && config.tools.some((t) => t.googleSearch);
+
 function generate(prompt, config = {}) {
     const text = typeof prompt === "string" ? prompt : JSON.stringify(prompt);
+
+    // Web-search grounding call (separate request, googleSearch tool only)
+    if (isGoogleSearchCall(config)) {
+        return Promise.resolve({
+            text: "web-search mock answer [1]",
+            candidates: [{ content: { role: "model", parts: [{ text: "web-search mock answer [1]" }] } }],
+            groundingMetadata: {
+                groundingChunks: [
+                    { web: { title: "Example Source", uri: "https://example.com/a" } },
+                ],
+            },
+            usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5 },
+        });
+    }
+
+    // Scripted agent turn (only when function tools are declared)
+    const hasFunctionTools =
+        Array.isArray(config?.tools) && config.tools.some((t) => t.functionDeclarations?.length);
+    if (hasFunctionTools && agentScript && agentScript.length) {
+        const turn = agentScript.shift();
+        if (turn.functionCalls?.length) {
+            const parts = turn.functionCalls.map((fc) => ({
+                functionCall: { name: fc.name, args: fc.args || {} },
+            }));
+            return Promise.resolve({
+                text: "",
+                candidates: [{ content: { role: "model", parts } }],
+                functionCalls: turn.functionCalls.map((fc) => ({ name: fc.name, args: fc.args || {} })),
+                usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5 },
+            });
+        }
+        return Promise.resolve({
+            text: turn.text || "mock agent answer",
+            candidates: [{ content: { role: "model", parts: [{ text: turn.text || "mock agent answer" }] } }],
+            usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5 },
+        });
+    }
+
     let response = "mock response";
 
     // Eval judge style calls expect JSON back
@@ -78,4 +135,4 @@ async function* generateStream(prompt, config) {
     }
 }
 
-module.exports = { embed, generate, generateStream };
+module.exports = { embed, generate, generateStream, __setAgentScript };

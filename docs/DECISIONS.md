@@ -128,3 +128,65 @@ One short entry per phase: what was built, why, tradeoffs, and free-tier implica
   socket test that destroys the connection mid-stream.
 - No persona create/edit UI — the composer picker covers selection; CRUD is
   API-complete and documented.
+
+## Phase 2 — Agent Mode (tools, trace, browse)
+
+- **Same endpoint, same plumbing.** `mode:"agent"` on
+  `POST /api/v1/chat/:chatId/stream` reuses the Phase 1 SSE machinery —
+  heartbeats, `res` close → AbortSignal, truncated-partial persistence,
+  UsageEvent logging, and the AI rate limiter (one agent request = one
+  request, regardless of internal steps). Non-agent behavior is untouched.
+- **Loop** (`services/agent.js`): `generateAgentTurn` (non-streaming
+  `generateContent` with `functionDeclarations`) → execute declared tools
+  server-side → feed `functionResponse` parts back → repeat until plain text
+  or a limit (`AGENT_MAX_STEPS`, `AGENT_TIMEOUT_MS`, `AGENT_MAX_TOOLS_PER_STEP`
+  — all read per-call from env). Any limit forces one tools-off final answer;
+  its text is chunked into `token` events so the client contract is identical.
+- **Tool registry** (`tools/index.js`): `{name, description,
+  parameters(JSON Schema), schema(zod), handler(ctx,args)}`. `ctx =
+  {userId, chatId, requestId, signal}` is server-injected — `userId` can
+  never come from the client or model args. Unknown tools / invalid args /
+  disabled tools (`web_search` with `browse=false`) all return *error tool
+  results* — nothing throws inside the loop.
+- **Guardrails apply to tools too.** Every tool result is JSON-wrapped in a
+  `<tool_result>` element, delimiter-neutralized and injection-scanned via
+  `guard.js`; flagged results are still passed as data and surface as
+  `flagged` citation chips.
+- **No raw document text in the wire trace.** SSE `tool_call`/`tool_result`
+  events carry `argsPreview`/`summary` truncated ≤200 chars of *metadata*
+  (query strings, counts) — never chunk text. The persisted `message.trace`
+  is the same shape.
+- **web_search is a separate model call** (`tools:[{googleSearch:{}}]`) —
+  Gemini forbids combining grounding with function declarations in one
+  request. Quota: `WebSearchQuota` counter doc per user+UTC-day, `count`
+  incremented before the call, TTL-expired at midnight; over-cap returns a
+  clear error result. UsageEvent kind `"tool"`.
+- **Ownership inside tools** is enforced with the same pattern as the rest
+  of the app: `File.findOne({_id, user: ctx.userId})`; `search_knowledge_base`
+  silently drops `fileIds` the caller doesn't own rather than erroring.
+- **New models (additive):** `FlashcardSet` (the studio flashcards endpoint
+  returned ephemeral cards — this is the first persistent deck storage;
+  Phase 5 may migrate it), `WebSearchQuota`, `File.overview` (lazy cached
+  summary), `Chat.messages[].trace` + web-source fields on `sources[]`.
+- **UI:** composer mode Select (Chat/Agent) + Browse checkbox (agent only,
+  hidden entirely when `FEATURE_AGENT=off` via `GET /api/v1/features`);
+  collapsible "How I got this answer" timeline under agent messages (live
+  during streaming, persisted after); web sources as domain chips.
+- **CI stability (2.0):** `MONGOMS_VERSION` pinned, binary cached via
+  `actions/cache` at `.cache/mongodb-binaries`, 60s startup timeout, one
+  retry in `tests/setup.js`.
+- **Eval:** `evals/golden-agent.json` — 10 cases scored on tool selection,
+  min tool calls, content, abstention, and a poisoned tool result; agent
+  metrics are nested under `metrics.agent` and regression-gated (except
+  `avgSteps`). Agent model calls are approximately counted against
+  `EVAL_MAX_CALLS`.
+
+### Deviations from spec
+- Agent tool calls run through the **non-streaming** model API
+  (`generateAgentTurn`) and the final answer is emitted as `token` events —
+  the client sees an identical SSE stream, but intermediate-step model text
+  is not streamed (it is discarded, per spec).
+- `analyze_table` intentionally returns `{ok:false}` — stub per spec.
+- Flashcard persistence uses a new `FlashcardSet` model — the pre-existing
+  endpoint only produced ephemeral cards; spec deferred real storage to
+  Phase 5.

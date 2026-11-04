@@ -39,6 +39,22 @@ const chatSchema = new mongoose.Schema({
                     snippet: String,
                     page: Number,
                     flagged: Boolean, // source contained instruction-like text (shown as data only)
+                    // web sources (agent browse)
+                    title: String,
+                    uri: String,
+                    domain: String,
+                },
+            ],
+            // Agent reasoning trace — {step, tool, argsPreview, ok, ms, summary}.
+            // Contains no raw document text.
+            trace: [
+                {
+                    step: Number,
+                    tool: String,
+                    argsPreview: String,
+                    ok: Boolean,
+                    ms: Number,
+                    summary: String,
                 },
             ],
             truncated: { type: Boolean, default: false }, // stream was aborted mid-answer

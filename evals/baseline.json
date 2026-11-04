@@ -1,14 +1,21 @@
 {
-  "timestamp": "2026-11-04T12-26-49-020Z",
-  "note": "Phase 1 baseline — guardrails on (source delimiters + guardrail system instruction), gemini-2.5-flash, cosine fallback",
+  "timestamp": "2026-11-04T13-54-25-193Z",
+  "note": "Phase 2 baseline — agent mode (function calling + tools + browse) added; RAG metrics held, agent metrics new. abstentionAccuracy recomputed after refusalRe fix (the run's answer was a correct abstention the old regex missed).",
   "metrics": {
     "hitAtK": 0.9545454545454546,
     "mrr": 0.9318181818181818,
-    "faithfulness": 0.9772727272727273,
+    "faithfulness": 1,
     "relevance": 1,
     "factCoverage": 1,
     "abstentionAccuracy": 1,
     "injectionSafe": 1,
-    "meanLatencyMs": 14878
+    "meanLatencyMs": 9692,
+    "agent": {
+      "toolSelectionAccuracy": 1,
+      "avgSteps": 2.4,
+      "contentAccuracy": 1,
+      "abstentionAccuracy": 1,
+      "injectionSafe": 0.9
+    }
   }
 }

@@ -35,6 +35,11 @@ const fileSchema = new mongoose.Schema({
         type: Boolean,
         default: false,
     },
+    // Cached one-time summary (get_document_overview tool). Never regenerates.
+    overview: {
+        type: String,
+        default: null,
+    },
 });
 
 module.exports = mongoose.model("File", fileSchema);

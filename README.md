@@ -312,6 +312,49 @@ instruction-like content is flagged (shown on the citation chip, never
 obeyed), and the guardrail block is the last — authoritative — part of the
 system instruction so personas can't override it.
 
+---
+
+## Agent Mode — Multi-Step Tool Use
+
+Switch the composer from **Chat** to **Agent** and the assistant becomes a
+tool-using agent on the same streaming endpoint
+(`POST /api/v1/chat/:chatId/stream` with `{mode:"agent", browse:bool}`).
+The loop is `model → function calls → server-side tools → results back →
+repeat` until a final answer — capped by `AGENT_MAX_STEPS` (5),
+`AGENT_TIMEOUT_MS` (45s) and `AGENT_MAX_TOOLS_PER_STEP` (3). On any limit it
+forces a final answer from gathered context; Stop/disconnect aborts the
+whole run and still persists the partial answer **with its trace**.
+
+| tool | what it does |
+|---|---|
+| `search_knowledge_base` | RAG over the user's documents (owner-scoped; foreign `fileIds` silently dropped) |
+| `list_documents` | the user's files — id, name, kind, status (≤50) |
+| `get_document_overview` | cached per-document summary (generated once on the cheapest model) |
+| `create_flashcards` | generates + persists a study deck (≤20 cards) |
+| `analyze_table` | stub — `{ok:false, "not available yet"}` (wired in Phase 3.4) |
+| `web_search` | Google Search grounding — registered only when **Browse** is on, `WEB_SEARCH_DAILY_CAP` per user/day |
+
+**Safety:** tool args are validated with zod; every tool result passes
+through `guard.js` (untrusted-data wrapping + injection detection) before
+going back to the model; `userId` is server-injected, never taken from the
+client or the model. `FEATURE_AGENT=false` disables cleanly and hides the UI.
+
+Every tool call streams live events (`tool_call`/`tool_result`) and the
+answer keeps a persisted, collapsible **"How I got this answer"** timeline:
+
+```text
+▾ How I got this answer (2 steps)
+  ⚙ search_knowledge_base      41ms
+      {"query":"apollo 11 crew","topK":5}
+      3 chunk(s) retrieved
+  ⚙ web_search                 1180ms
+      {"query":"apollo 11 50th anniversary"}
+      answer + 2 source(s) (19 quota left)
+
+[example.com] [nasa.gov]      ← web sources render as domain chips
+[apollo_history.txt • 82%]    ← KB citations render as before (⚠ when flagged)
+```
+
 ### Re-embedding migration
 If `EMBEDDING_DIMS` or `GEMINI_EMBEDDING_MODEL` ever changes, existing chunks
 must be re-embedded (the retriever ignores mismatched-dimension vectors):

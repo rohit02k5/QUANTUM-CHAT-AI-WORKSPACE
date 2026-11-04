@@ -91,19 +91,20 @@ class GeminiHelper {
      * @param {string} kind - UsageEvent kind
      * @returns {Promise<Object>} - SDK response (use getText)
      */
-    async generateContentWithRetry(prompt, config = {}, retries = 3, kind = "chat") {
+    async generateContentWithRetry(prompt, config = {}, retries = 3, kind = "chat", signal = null) {
         if (this._mock) return this._mock.generate(prompt, config);
         const models = [this.modelName, ...this.fallbackModels];
         let lastError;
         for (let m = 0; m < models.length; m++) {
             const model = models[m];
             for (let attempt = 1; attempt <= retries; attempt++) {
+                if (signal?.aborted) throw new Error("aborted");
                 const start = Date.now();
                 try {
                     const result = await this.ai.models.generateContent({
                         model,
                         contents: prompt,
-                        config,
+                        config: { ...config, abortSignal: signal || undefined },
                     });
                     recordUsage({ kind, model, latencyMs: Date.now() - start, ok: true, usageMetadata: result.usageMetadata });
                     return result;
@@ -195,18 +196,58 @@ class GeminiHelper {
      * Single-shot generation on the cheapest configured model (used for
      * background work like auto-titles). No fallback chain — cheap by design.
      */
-    async generateCheapest(prompt, config = {}, kind = "chat") {
+    async generateCheapest(prompt, config = {}, kind = "chat", signal = null) {
         if (this._mock) return this._mock.generate(prompt, config);
         const model = this.fallbackModels[this.fallbackModels.length - 1] || this.modelName;
         const start = Date.now();
         try {
-            const result = await this.ai.models.generateContent({ model, contents: prompt, config });
+            const result = await this.ai.models.generateContent({
+                model,
+                contents: prompt,
+                config: { ...config, abortSignal: signal || undefined },
+            });
             recordUsage({ kind, model, latencyMs: Date.now() - start, ok: true, usageMetadata: result.usageMetadata });
             return result;
         } catch (error) {
             recordUsage({ kind, model, latencyMs: Date.now() - start, ok: false, errorCode: error.status || error.message });
             throw error;
         }
+    }
+
+    /**
+     * One non-streaming agent turn: full contents array + tool config.
+     * Uses the retry/fallback chain with kind "agent".
+     */
+    async generateAgentTurn(contents, config = {}, signal = null) {
+        return this.generateContentWithRetry(contents, config, 2, "agent", signal);
+    }
+
+    /**
+     * Extract function calls from a generateContent response.
+     * @returns {Array<{id?:string, name:string, args:Object}>}
+     */
+    getFunctionCalls(result) {
+        if (!result) return [];
+        if (Array.isArray(result.functionCalls) && result.functionCalls.length) {
+            return result.functionCalls.map((fc) => ({
+                id: fc.id,
+                name: fc.name,
+                args: fc.args || {},
+            }));
+        }
+        const parts = result.candidates?.[0]?.content?.parts || [];
+        return parts
+            .filter((p) => p.functionCall)
+            .map((p) => ({ id: p.functionCall.id, name: p.functionCall.name, args: p.functionCall.args || {} }));
+    }
+
+    /** Raw model content parts (for feeding a turn back into contents). */
+    getResponseParts(result) {
+        return result?.candidates?.[0]?.content?.parts || [];
+    }
+
+    getUsageMetadata(result) {
+        return result?.usageMetadata || null;
     }
 
     // Helper to get text from a generateContent response (new SDK: .text getter)

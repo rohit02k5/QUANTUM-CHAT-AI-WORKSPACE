@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Box, Typography, TextField, IconButton, Paper, Avatar, Tooltip, CircularProgress, Button, Menu, MenuItem, Checkbox, ListItemText, Select, FormControl, InputLabel } from "@mui/material";
+import { Box, Typography, TextField, IconButton, Paper, Avatar, Tooltip, CircularProgress, Button, Menu, MenuItem, Checkbox, ListItemText, Select, FormControl } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
@@ -111,7 +111,47 @@ const Mermaid = ({ chart }) => {
     );
 };
 
-const MessageBubble = ({ role, content, sources, truncated }) => {
+// "How I got this answer" — collapsible agent trace timeline
+const TraceTimeline = ({ trace }) => {
+    const [open, setOpen] = useState(false);
+    if (!trace || !trace.length) return null;
+    return (
+        <Box sx={{ mt: 1 }}>
+            <Typography
+                variant="caption"
+                color="text.secondary"
+                onClick={() => setOpen((o) => !o)}
+                sx={{ cursor: "pointer", userSelect: "none", display: "inline-flex", alignItems: "center", gap: 0.5 }}
+            >
+                {open ? "▾" : "▸"} How I got this answer ({trace.length} step{trace.length > 1 ? "s" : ""})
+            </Typography>
+            {open && (
+                <Box sx={{ mt: 1, pl: 1.5, borderLeft: "2px solid", borderColor: "divider" }}>
+                    {trace.map((t, i) => (
+                        <Box key={i} sx={{ mb: 1 }}>
+                            <Typography variant="caption" sx={{ display: "flex", alignItems: "center", gap: 0.75, fontWeight: 600 }}>
+                                {t.ok === false ? "✗" : "⚙"} {t.tool}
+                                {typeof t.ms === "number" && <span style={{ opacity: 0.6 }}>{t.ms}ms</span>}
+                            </Typography>
+                            {t.argsPreview && (
+                                <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontFamily: "monospace", fontSize: "0.68rem" }}>
+                                    {t.argsPreview}
+                                </Typography>
+                            )}
+                            {t.summary && (
+                                <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+                                    {t.ok === false ? `failed — ${t.summary}` : t.summary}
+                                </Typography>
+                            )}
+                        </Box>
+                    ))}
+                </Box>
+            )}
+        </Box>
+    );
+};
+
+const MessageBubble = ({ role, content, sources, truncated, trace }) => {
     const theme = useTheme();
     const isUser = role === "user";
 
@@ -184,23 +224,41 @@ const MessageBubble = ({ role, content, sources, truncated }) => {
                 {truncated && (
                     <Chip size="small" label="partial answer" color="warning" variant="outlined" sx={{ mb: 1 }} />
                 )}
+                <TraceTimeline trace={trace} />
                 {sources && sources.length > 0 && (
                     <Box sx={{ mt: 2 }}>
                         <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
                             Sources
                         </Typography>
-                        {sources.map((s, idx) => (
-                            <Chip
-                                key={idx}
-                                size="small"
-                                label={`${s.originalName}${s.page ? ` p.${s.page}` : ""} • ${((s.score || 0) * 100).toFixed(1)}%`}
-                                variant="outlined"
-                                color={s.flagged ? "warning" : "default"}
-                                icon={s.flagged ? <ReportProblemIcon sx={{ fontSize: 14 }} /> : undefined}
-                                sx={{ mr: 0.5, mb: 0.5 }}
-                                title={s.flagged ? "This source contains instruction-like text (treated as data only)" : (s.snippet || s.originalName)}
-                            />
-                        ))}
+                        {sources.map((s, idx) =>
+                            s.uri ? (
+                                <Chip
+                                    key={idx}
+                                    size="small"
+                                    component="a"
+                                    href={s.uri}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    clickable
+                                    label={s.domain || s.title || s.uri}
+                                    variant="outlined"
+                                    color="info"
+                                    sx={{ mr: 0.5, mb: 0.5 }}
+                                    title={s.title || s.uri}
+                                />
+                            ) : (
+                                <Chip
+                                    key={idx}
+                                    size="small"
+                                    label={`${s.originalName}${s.page ? ` p.${s.page}` : ""} • ${((s.score || 0) * 100).toFixed(1)}%`}
+                                    variant="outlined"
+                                    color={s.flagged ? "warning" : "default"}
+                                    icon={s.flagged ? <ReportProblemIcon sx={{ fontSize: 14 }} /> : undefined}
+                                    sx={{ mr: 0.5, mb: 0.5 }}
+                                    title={s.flagged ? "This source contains instruction-like text (treated as data only)" : (s.snippet || s.originalName)}
+                                />
+                            )
+                        )}
                     </Box>
                 )}
             </Paper>
@@ -226,6 +284,10 @@ const Chat = () => {
     const [documents, setDocuments] = useState([]); // User's indexed KB files
     const [selectedDocIds, setSelectedDocIds] = useState([]); // Empty = search all docs
     const [docMenuAnchor, setDocMenuAnchor] = useState(null);
+    // Agent mode + feature flags
+    const [features, setFeatures] = useState({ agent: true });
+    const [agentMode, setAgentMode] = useState(false);
+    const [browseEnabled, setBrowseEnabled] = useState(false);
     // Streaming state
     const [streaming, setStreaming] = useState(false);
     const streamAbortRef = useRef(null);
@@ -245,6 +307,10 @@ const Chat = () => {
         loadChatHistory();
         loadDocs();
         loadPersonas();
+        axios.get("/api/v1/features").then(({ data }) => {
+            setFeatures(data);
+            if (!data.agent) setAgentMode(false);
+        }).catch(() => {});
     }, []);
 
     useEffect(() => {
@@ -407,9 +473,12 @@ const Chat = () => {
 
         const body = {
             message: msgToSend,
+            chatId, // needed by the non-stream fallback path
             fileId: fileToSend,
             useDocuments,
             documentIds: selectedDocIds,
+            mode: agentMode ? "agent" : undefined,
+            browse: browseEnabled || undefined,
         };
 
         const controller = new AbortController();
@@ -421,7 +490,22 @@ const Chat = () => {
         let newChatId = chatId;
         let sawToken = false;
         let streamFailed = false;
+        const liveTrace = [];
         streamAccRef.current = "";
+
+        const updateStreamMessage = (extra = {}) => {
+            setMessages((prev) => {
+                const copy = [...prev];
+                copy[copy.length - 1] = {
+                    role: "model",
+                    content: acc,
+                    sources,
+                    trace: liveTrace.length ? [...liveTrace] : undefined,
+                    ...extra,
+                };
+                return copy;
+            });
+        };
 
         // Batch token renders: accumulate text, flush once per animation frame
         const scheduleFlush = () => {
@@ -429,12 +513,7 @@ const Chat = () => {
             streamFlushScheduled.current = true;
             requestAnimationFrame(() => {
                 streamFlushScheduled.current = false;
-                const text = acc;
-                setMessages((prev) => {
-                    const copy = [...prev];
-                    copy[copy.length - 1] = { role: "model", content: text, sources };
-                    return copy;
-                });
+                updateStreamMessage();
             });
         };
 
@@ -454,8 +533,19 @@ const Chat = () => {
                         acc += evt.text;
                         streamAccRef.current = acc;
                         scheduleFlush();
+                    } else if (evt.type === "tool_call") {
+                        const [step, tool] = String(evt.id).split(":");
+                        liveTrace.push({ step: Number(step), tool, argsPreview: evt.argsPreview, pending: true });
+                        updateStreamMessage();
+                    } else if (evt.type === "tool_result") {
+                        const entry = liveTrace.find((t) => t.pending);
+                        if (entry) {
+                            entry.ok = evt.ok; entry.ms = evt.ms; entry.summary = evt.summary; entry.pending = false;
+                        }
+                        updateStreamMessage();
                     } else if (evt.type === "done") {
                         newChatId = evt.chatId || newChatId;
+                        if (evt.sources?.length) sources = evt.sources; // agent tool sources arrive after meta
                     } else if (evt.type === "error") {
                         streamFailed = true;
                     }
@@ -466,11 +556,7 @@ const Chat = () => {
 
             // Final synchronous flush so no token is lost to a pending rAF
             if (sawToken) {
-                setMessages((prev) => {
-                    const copy = [...prev];
-                    copy[copy.length - 1] = { role: "model", content: acc, sources, truncated: wasAborted || streamFailed };
-                    return copy;
-                });
+                updateStreamMessage({ truncated: wasAborted || streamFailed });
             }
 
             if (!sawToken && (result.refused || streamFailed || !result.ok)) {
@@ -656,11 +742,6 @@ const Chat = () => {
                         onClick={generateMindmap}
                         disabled={!chatId || loading}
                         sx={{ borderRadius: "12px", textTransform: "none", borderColor: theme.palette.divider }}
-                        variant="outlined"
-                        startIcon={<AutoAwesomeIcon />}
-                        onClick={generateMindmap}
-                        disabled={!chatId || loading}
-                        sx={{ borderRadius: "12px", textTransform: "none", borderColor: theme.palette.divider }}
                     >
                         Visualize
                     </Button>
@@ -676,7 +757,7 @@ const Chat = () => {
                             </Box>
                         )}
                         {messages.map((msg, index) => (
-                            <MessageBubble key={index} role={msg.role} content={msg.content} sources={msg.sources} truncated={msg.truncated} />
+                            <MessageBubble key={index} role={msg.role} content={msg.content} sources={msg.sources} truncated={msg.truncated} trace={msg.trace} />
                         ))}
                         {loading && (
                             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -698,6 +779,38 @@ const Chat = () => {
                     )}
                 </Box>
                 <Paper component="form" sx={{ p: "2px 4px", display: "flex", alignItems: "center", borderRadius: "24px", bgcolor: theme.palette.background.paper, border: `1px solid ${theme.palette.divider}`, boxShadow: "0px 4px 20px rgba(0,0,0,0.1)" }}>
+                    {/* Mode switch: Chat | Agent (hidden when FEATURE_AGENT=off) */}
+                    {features.agent && (
+                        <FormControl size="small" sx={{ minWidth: 88, ml: 1 }}>
+                            <Select
+                                value={agentMode ? "agent" : "chat"}
+                                onChange={(e) => setAgentMode(e.target.value === "agent")}
+                                variant="standard"
+                                disableUnderline
+                                sx={{ fontSize: "0.8rem", fontWeight: 600 }}
+                            >
+                                <MenuItem value="chat">Chat</MenuItem>
+                                <MenuItem value="agent">Agent</MenuItem>
+                            </Select>
+                        </FormControl>
+                    )}
+                    {/* Browse toggle — agent mode only */}
+                    {features.agent && agentMode && (
+                        <Tooltip title="Let the agent search the web (capped daily)">
+                            <Box sx={{ display: "flex", alignItems: "center", px: 0.5 }}>
+                                <input
+                                    type="checkbox"
+                                    id="browseToggle"
+                                    checked={browseEnabled}
+                                    onChange={(e) => setBrowseEnabled(e.target.checked)}
+                                    style={{ cursor: "pointer" }}
+                                />
+                                <Typography component="label" htmlFor="browseToggle" variant="caption" sx={{ cursor: "pointer", color: "text.secondary" }}>
+                                    Browse
+                                </Typography>
+                            </Box>
+                        </Tooltip>
+                    )}
                     {/* Persona picker */}
                     {(presets.length > 0 || customPersonas.length > 0) && (
                         <FormControl size="small" sx={{ minWidth: 110, ml: 1 }}>
