@@ -306,6 +306,10 @@ abstention accuracy, and injection-safety**. Reports land in
 
 *includes free-tier 429 back-off during the run; not regression-gated.
 
+Phase 2 agent metrics (10 cases in `evals/golden-agent.json`, same run):
+tool-selection **1.0** · avg steps **2.4** · content accuracy **1.0** ·
+abstention **1.0** · injection-safe **0.9**.
+
 Guardrails (Phase 1): every retrieved chunk/attachment is wrapped in
 `<source>` delimiters, delimiter-like text inside sources is neutralized,
 instruction-like content is flagged (shown on the citation chip, never
