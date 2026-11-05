@@ -6,12 +6,20 @@ import ImageIcon from "@mui/icons-material/Image";
 import DeleteIcon from "@mui/icons-material/Delete";
 import AudiotrackIcon from "@mui/icons-material/Audiotrack";
 import ReplayIcon from "@mui/icons-material/Replay";
+import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import TableChartIcon from "@mui/icons-material/TableChart";
 import axios from "../axiosConfig";
 import toast from "react-hot-toast";
 import { motion } from "framer-motion";
 import AudioPlayerModal from "../components/AudioPlayerModal";
+import PdfViewerModal from "../components/PdfViewerModal";
+import ImageViewerModal from "../components/ImageViewerModal";
+import AskDataPanel from "../components/AskDataPanel";
+import DeepAnalysisDialog from "../components/DeepAnalysisDialog";
 
 const baseURL = axios.baseURL;
+
+const isCsv = (mimetype) => /csv|ms-excel/i.test(mimetype || "");
 
 const STAGE_LABELS = {
     extract: "Extracting text",
@@ -29,6 +37,10 @@ const KnowledgeBase = () => {
     const [mediaItems, setMediaItems] = useState([]);
     const [stats, setStats] = useState({ chats: 0, files: 0 });
     const [player, setPlayer] = useState({ open: false, fileId: null, fileName: "", seekSec: null });
+    const [pdfView, setPdfView] = useState(null); // {fileId, page, name}
+    const [imageView, setImageView] = useState(null); // {fileId, name, description}
+    const [askDataFile, setAskDataFile] = useState(null); // {_id, originalName}
+    const [deepFile, setDeepFile] = useState(null); // file object for Deep analysis
     const sseFailed = useRef(false);
     const sseAbort = useRef(new Map());
 
@@ -45,13 +57,18 @@ const KnowledgeBase = () => {
             setStats({ chats: chats.length, files: files.length });
             setMediaItems(files.map((f) => ({
                 id: f._id,
-                type: f.kind === "audio" || (f.mimetype || "").startsWith("audio/") ? "audio" : "doc",
+                type: f.kind === "audio" || (f.mimetype || "").startsWith("audio/") ? "audio" : f.kind === "image" || (f.mimetype || "").startsWith("image/") ? "image" : "doc",
+                mimetype: f.mimetype,
                 name: f.originalName,
                 originalName: f.originalName,
                 filename: f.filename,
                 status: f.status || "ready",
                 job: f.job || null,
                 durationSec: f.durationSec,
+                pageCount: f.pageCount,
+                pagesWithoutText: f.pagesWithoutText,
+                pageIndexed: f.pageIndexed,
+                description: f.description,
                 date: new Date(f.uploadDate).toLocaleDateString()
             })));
         } catch (error) {
@@ -154,10 +171,29 @@ const KnowledgeBase = () => {
         }
     };
 
-    // Files live behind auth — audio opens the player, docs open as blob
+    const handleReprocess = async (item, e) => {
+        e.stopPropagation();
+        try {
+            await axios.post(`/api/v1/files/${item.id}/reprocess`);
+            toast.success("Reprocess queued — regenerating with page metadata");
+            fetchData();
+        } catch (err) {
+            toast.error(err.response?.data?.message || "Reprocess failed");
+        }
+    };
+
+    // Files live behind auth — audio plays, PDFs open at page 1 in the viewer
     const handleViewFile = async (item) => {
         if (item.type === "audio") {
             setPlayer({ open: true, fileId: item.id, fileName: item.originalName, seekSec: null });
+            return;
+        }
+        if (item.mimetype === "application/pdf") {
+            setPdfView({ fileId: item.id, page: 1, name: item.originalName });
+            return;
+        }
+        if (item.type === "image") {
+            setImageView({ fileId: item.id, name: item.originalName, description: item.description });
             return;
         }
         try {
@@ -289,6 +325,27 @@ const KnowledgeBase = () => {
                                                     </IconButton>
                                                 </Tooltip>
                                             )}
+                                            {item.mimetype === "application/pdf" && item.status === "ready" && item.pageIndexed === false && (
+                                                <Tooltip title="Reprocess to add page-level citations">
+                                                    <IconButton size="small" color="primary" onClick={(e) => handleReprocess(item, e)}>
+                                                        <ReplayIcon fontSize="small" />
+                                                    </IconButton>
+                                                </Tooltip>
+                                            )}
+                                            {item.mimetype === "application/pdf" && item.status === "ready" && (
+                                                <Tooltip title="Deep analysis — read figures, tables & scanned pages">
+                                                    <IconButton size="small" color="primary" onClick={(e) => { e.stopPropagation(); setDeepFile(item); }}>
+                                                        <AutoAwesomeIcon fontSize="small" />
+                                                    </IconButton>
+                                                </Tooltip>
+                                            )}
+                                            {isCsv(item.mimetype) && item.status === "ready" && (
+                                                <Tooltip title="Ask your data — query this CSV in plain English">
+                                                    <IconButton size="small" color="primary" onClick={(e) => { e.stopPropagation(); setAskDataFile(item); }}>
+                                                        <TableChartIcon fontSize="small" />
+                                                    </IconButton>
+                                                </Tooltip>
+                                            )}
                                             <IconButton size="small" onClick={(e) => handleDeleteFile(item.id, e)}>
                                                 <DeleteIcon fontSize="small" />
                                             </IconButton>
@@ -308,6 +365,15 @@ const KnowledgeBase = () => {
                                     {item.status === "failed" && (
                                         <Chip size="small" color="error" label="Ingestion failed" sx={{ mt: 1 }} />
                                     )}
+                                    {item.pagesWithoutText?.length > 0 && (
+                                        <Chip
+                                            size="small"
+                                            color="warning"
+                                            variant="outlined"
+                                            label={`${item.pagesWithoutText.length} page${item.pagesWithoutText.length > 1 ? "s" : ""} look${item.pagesWithoutText.length > 1 ? "" : "s"} scanned — run Deep analysis to read ${item.pagesWithoutText.length > 1 ? "them" : "it"}`}
+                                            sx={{ mt: 1 }}
+                                        />
+                                    )}
                                 </CardContent>
                             </Card>
                         </motion.div>
@@ -321,6 +387,32 @@ const KnowledgeBase = () => {
                 fileId={player.fileId}
                 fileName={player.fileName}
                 seekSec={player.seekSec}
+            />
+            <PdfViewerModal
+                open={!!pdfView}
+                onClose={() => setPdfView(null)}
+                fileId={pdfView?.fileId}
+                fileName={pdfView?.name}
+                initialPage={pdfView?.page}
+            />
+            <ImageViewerModal
+                open={!!imageView}
+                onClose={() => setImageView(null)}
+                fileId={imageView?.fileId}
+                fileName={imageView?.name}
+                description={imageView?.description}
+            />
+            <AskDataPanel
+                open={!!askDataFile}
+                onClose={() => setAskDataFile(null)}
+                fileId={askDataFile?._id}
+                fileName={askDataFile?.originalName}
+            />
+            <DeepAnalysisDialog
+                open={!!deepFile}
+                onClose={() => setDeepFile(null)}
+                file={deepFile}
+                onDone={fetchData}
             />
         </Box>
     );

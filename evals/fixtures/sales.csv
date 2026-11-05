@@ -1,0 +1,9 @@
+region,quarter,revenue,units
+East,Q1,10,100
+West,Q1,14,120
+East,Q2,19,140
+West,Q2,27,180
+East,Q3,30,200
+West,Q3,22,160
+East,Q4,41,260
+West,Q4,33,210

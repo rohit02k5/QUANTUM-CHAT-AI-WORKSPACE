@@ -23,15 +23,17 @@ const SIGNATURES = [
 const ACCEPTED_MIMES = new Set(["audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/ogg", "audio/flac", "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/aac"]);
 
 /**
- * Validate an upload buffer as audio.
+ * Validate an upload's head bytes as audio (magic bytes live in the first
+ * ~32 bytes — pass a prefix buffer, not the whole file).
  * Returns {mime, ext} when valid, or {error} describing the rejection.
  */
-function sniffAudio(buffer, declaredMime) {
+function sniffAudio(head, declaredMime, sizeBytes) {
     if (!AUDIO_FEATURE()) return { error: "Audio uploads are disabled" };
-    if (buffer.length > AUDIO_MAX_BYTES()) {
+    const size = sizeBytes != null ? sizeBytes : head.length;
+    if (size > AUDIO_MAX_BYTES()) {
         return { error: `Audio exceeds the ${Math.round(AUDIO_MAX_BYTES() / 1024 / 1024)}MB limit` };
     }
-    const hit = SIGNATURES.find((s) => s.test(buffer));
+    const hit = SIGNATURES.find((s) => s.test(head));
     if (!hit) {
         // Allow declared-audio mimes only when the bytes look like a media container
         return { error: "Unsupported audio format — use mp3, m4a, wav, ogg or flac" };
@@ -48,6 +50,17 @@ async function durationSec(buffer, mime) {
     try {
         const { parseBuffer } = await mm();
         const meta = await parseBuffer(buffer, { mimeType: mime });
+        return meta?.format?.duration || null;
+    } catch {
+        return null;
+    }
+}
+
+/** Duration from a file path — streams, never buffers the file in RAM. */
+async function durationSecFromFile(filePath, mime) {
+    try {
+        const { parseFile } = await mm();
+        const meta = await parseFile(filePath, { mimeType: mime });
         return meta?.format?.duration || null;
     } catch {
         return null;
@@ -95,4 +108,4 @@ function transcriptToDocs(segments, { target = 1000 } = {}) {
     return docs;
 }
 
-module.exports = { sniffAudio, isAudioMime, durationSec, transcriptToDocs, mmss, AUDIO_MAX_BYTES, AUDIO_MAX_SEC, AUDIO_FEATURE };
+module.exports = { sniffAudio, isAudioMime, durationSec, durationSecFromFile, transcriptToDocs, mmss, AUDIO_MAX_BYTES, AUDIO_MAX_SEC, AUDIO_FEATURE };

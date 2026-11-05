@@ -24,5 +24,10 @@
   { "fixture": "meeting_audio.transcript.json", "question": "In the meeting recording, when was it decided to ship Phase 3A, and what storage was chosen?", "expectedFacts": ["GridFS"], "mustCiteFixture": true, "expectsTimestamp": true, "windowSec": { "startSec": 32, "endSec": 55 } },
   { "fixture": "meeting_audio.transcript.json", "question": "At what time in the recording was the Atlas verification assigned, and who said it?", "expectedFacts": ["Atlas", "Speaker 2"], "mustCiteFixture": true, "expectsTimestamp": true, "windowSec": { "startSec": 55, "endSec": 78 } },
   { "fixture": "meeting_audio.transcript.json", "question": "What action item was assigned to Rohit in the meeting audio, and when?", "expectedFacts": ["eval", "quantum_ai_eval"], "mustCiteFixture": true, "expectsTimestamp": true, "windowSec": { "startSec": 78, "endSec": 96 } },
-  { "fixture": "meeting_audio.transcript.json", "question": "When does the recording mention the next sync meeting?", "expectedFacts": ["Monday", "ten"], "mustCiteFixture": true, "expectsTimestamp": true, "windowSec": { "startSec": 138, "endSec": 150 } }
+  { "fixture": "meeting_audio.transcript.json", "question": "When does the recording mention the next sync meeting?", "expectedFacts": ["Monday", "ten"], "mustCiteFixture": true, "expectsTimestamp": true, "windowSec": { "startSec": 138, "endSec": 150 } },
+  { "fixture": "pages.pdf", "question": "What hydration percentage does the sourdough recipe use?", "expectedFacts": ["75"], "mustCiteFixture": true, "expectedPage": 2 },
+  { "fixture": "pages.pdf", "question": "In the Fischer vs Spassky match, what was the final score?", "expectedFacts": ["12.5", "8.5"], "mustCiteFixture": true, "expectedPage": 3 },
+  { "fixture": "pages.pdf", "question": "What is the tsukubai used for in a Japanese garden?", "expectedFacts": ["purif"], "mustCiteFixture": true, "expectedPage": 5 },
+  { "fixture": "chart.png", "question": "According to my quarterly revenue chart, which quarter had the highest revenue and what was it?", "expectedFacts": ["Q4", "27"], "mustCiteFixture": true, "imageQA": true },
+  { "fixture": "chart.png", "question": "How much did revenue grow from Q1 to Q4 in the chart I uploaded?", "expectedFacts": ["10", "27"], "mustCiteFixture": true, "imageQA": true }
 ]

@@ -237,6 +237,21 @@ describe("ingestion jobs + GridFS", () => {
         expect(res.body.message).toMatch(/storage limit/i);
     });
 
+    it("rejects an oversized document upload with a clear 413 before staging", async () => {
+        const u = await createUser();
+        // 10MB of text + multipart overhead > the 10MB doc cap
+        const big = Buffer.alloc(10 * 1024 * 1024, "x");
+        const res = await request(app)
+            .post("/api/v1/files/upload")
+            .set(auth(u.token))
+            .attach("file", big, "huge.txt");
+        expect(res.status).toBe(413);
+        expect(res.body.message).toMatch(/limited to 10MB/i);
+        // nothing was persisted
+        const uid = await userIdOf(u.email);
+        expect(await File.countDocuments({ user: uid, originalName: "huge.txt" })).toBe(0);
+    });
+
     it("view supports HTTP Range requests on GridFS bytes", async () => {
         const u = await createUser();
         const res = await request(app)
@@ -322,8 +337,8 @@ describe("audio ingestion", () => {
             .post("/api/v1/files/upload")
             .set(auth(u.token))
             .attach("file", makeWav(1), { filename: "a.wav", contentType: "audio/wav" });
-        expect(res2.status).toBe(400);
-        expect(res2.body.message).toMatch(/MB limit/i);
+        expect(res2.status).toBe(413);
+        expect(res2.body.message).toMatch(/limited to/i);
     });
 
     it("sync audio upload transcribes, chunks with timestamps and marks file ready", async () => {

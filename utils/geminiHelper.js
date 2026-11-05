@@ -404,6 +404,185 @@ class GeminiHelper {
             if (uploadedName) await this.deleteMedia(uploadedName);
         }
     }
+
+    // ------------------------------------------------------------------
+    // Vision (Phase 3B)
+    // ------------------------------------------------------------------
+
+    /**
+     * Describe an image → {caption, ocrText, dataInsights?, tags[]}.
+     * Images are ≤ IMAGE_MAX_MB (8) so they always fit inline — no Files API.
+     * The caller decides retryability; uses the normal fallback chain.
+     */
+    async describeImage(buffer, { mime, signal = null } = {}) {
+        const prompt = "Analyze this image for a knowledge base. Return JSON only:\n" +
+            '{"caption": string (one sentence, objective), "ocrText": string (verbatim text visible in the image, "" if none), "dataInsights": string (for charts/diagrams: the trend, axes, and key values — "" if not applicable), "tags": string[] (≤6 search keywords)}';
+        const schema = {
+            type: "OBJECT",
+            properties: {
+                caption: { type: "STRING" },
+                ocrText: { type: "STRING" },
+                dataInsights: { type: "STRING" },
+                tags: { type: "ARRAY", items: { type: "STRING" } },
+            },
+            required: ["caption", "ocrText", "tags"],
+        };
+        const contents = [{
+            role: "user",
+            parts: [{ inlineData: { mimeType: mime, data: buffer.toString("base64") } }, { text: prompt }],
+        }];
+        const config = { responseMimeType: "application/json", responseSchema: schema };
+
+        let result;
+        if (this._mock) {
+            const start = Date.now();
+            result = await this._mock.generate(contents, config);
+            recordUsage({ kind: "vision", model: this.modelName, latencyMs: Date.now() - start, ok: true, usageMetadata: result.usageMetadata });
+        } else {
+            result = await this.generateContentWithRetry(contents, config, 2, "vision", signal);
+        }
+        const raw = this.getText(result);
+        let parsed = {};
+        try { parsed = JSON.parse(raw); }
+        catch { parsed = JSON.parse((raw.match(/\{[\s\S]*\}/) || ["{}"])[0]); }
+        return {
+            caption: String(parsed.caption || ""),
+            ocrText: String(parsed.ocrText || ""),
+            dataInsights: parsed.dataInsights ? String(parsed.dataInsights) : undefined,
+            tags: Array.isArray(parsed.tags) ? parsed.tags.map(String).slice(0, 6) : [],
+            usage: this.getUsageMetadata(result),
+        };
+    }
+
+    /**
+     * Analyze a PDF page range → [{page, type, description, keyData}].
+     * Accepts inline bytes or a pre-uploaded Files-API media part; `pageOffset`
+     * is added to the model's page numbers to map a sliced PDF back to the
+     * original document's pagination.
+     */
+    async analyzePdfPages({ buffer, mime = "application/pdf", mediaPart, pageOffset = 0, signal = null } = {}) {
+        const prompt = "Analyze every page of this PDF excerpt. For EACH page return one JSON object:\n" +
+            '{"page": number (1-based within THIS document), "type": "figure"|"table"|"chart"|"scanned_text", "description": string (what the page shows — for scanned_text include the text content verbatim), "keyData": string (numbers/labels that matter — "" if none)}.\n' +
+            "Classify a page as scanned_text only when it is a readable text page with no meaningful figure. Output a JSON array, one entry per page, JSON only.";
+        const schema = {
+            type: "ARRAY",
+            items: {
+                type: "OBJECT",
+                properties: {
+                    page: { type: "NUMBER" },
+                    type: { type: "STRING", enum: ["figure", "table", "chart", "scanned_text"] },
+                    description: { type: "STRING" },
+                    keyData: { type: "STRING" },
+                },
+                required: ["page", "type", "description"],
+            },
+        };
+        const part = mediaPart || { inlineData: { mimeType: mime, data: buffer.toString("base64") } };
+        const contents = [{ role: "user", parts: [part, { text: prompt }] }];
+        const config = { responseMimeType: "application/json", responseSchema: schema };
+
+        let result;
+        if (this._mock) {
+            const start = Date.now();
+            result = await this._mock.generate(contents, config);
+            recordUsage({ kind: "vision", model: this.modelName, latencyMs: Date.now() - start, ok: true, usageMetadata: result.usageMetadata });
+        } else {
+            result = await this.generateContentWithRetry(contents, config, 2, "vision", signal);
+        }
+        const raw = this.getText(result);
+        let items = [];
+        try { items = JSON.parse(raw); }
+        catch { items = JSON.parse((raw.match(/\[[\s\S]*\]/) || ["[]"])[0]); }
+        if (!Array.isArray(items)) items = [];
+        return {
+            items: items.map((it) => ({
+                page: (parseInt(it.page, 10) || 1) + pageOffset,
+                type: ["figure", "table", "chart", "scanned_text"].includes(it.type) ? it.type : "figure",
+                description: String(it.description || ""),
+                keyData: it.keyData ? String(it.keyData) : undefined,
+            })),
+            usage: this.getUsageMetadata(result),
+        };
+    }
+
+    /**
+     * NL question → structured table-query spec (never model-written code).
+     * Callers validate the returned spec against the column allow-list.
+     */
+    async planTableQuery(question, { columns, sampleRows, signal = null } = {}) {
+        const prompt =
+            "Convert the question into a STRUCTURED query spec for a CSV table. Return JSON only, matching this shape:\n" +
+            '{"filters": [{"col": string, "op": "eq|ne|gt|gte|lt|lte|in|contains", "value": any}], "groupBy": string[] (≤3), "aggs": [{"col": string, "fn": "sum|avg|count|min|max", "alias"?: string}] (≤5), "orderBy": {"col": string, "dir": "asc|desc"}, "limit": number (≤1000), "chart"?: {"type": "bar|line|pie|scatter", "x": string, "y": string}}.\n' +
+            "Only use columns that exist. Omit parts you don't need. If the question can't be expressed as a table query, return {}.\n\n" +
+            `COLUMNS: ${JSON.stringify(columns)}\n` +
+            `SAMPLE ROWS: ${JSON.stringify((sampleRows || []).slice(0, 5))}\n\n` +
+            `QUESTION: ${question}`;
+        const schema = {
+            type: "OBJECT",
+            properties: {
+                filters: {
+                    type: "ARRAY",
+                    items: {
+                        type: "OBJECT",
+                        properties: {
+                            col: { type: "STRING" },
+                            op: { type: "STRING", enum: ["eq", "ne", "gt", "gte", "lt", "lte", "in", "contains"] },
+                            value: {},
+                        },
+                        required: ["col", "op"],
+                    },
+                },
+                groupBy: { type: "ARRAY", items: { type: "STRING" } },
+                aggs: {
+                    type: "ARRAY",
+                    items: {
+                        type: "OBJECT",
+                        properties: {
+                            col: { type: "STRING" },
+                            fn: { type: "STRING", enum: ["sum", "avg", "count", "min", "max"] },
+                            alias: { type: "STRING" },
+                        },
+                        required: ["col", "fn"],
+                    },
+                },
+                orderBy: {
+                    type: "OBJECT",
+                    properties: {
+                        col: { type: "STRING" },
+                        dir: { type: "STRING", enum: ["asc", "desc"] },
+                    },
+                },
+                limit: { type: "NUMBER" },
+                chart: {
+                    type: "OBJECT",
+                    properties: {
+                        type: { type: "STRING", enum: ["bar", "line", "pie", "scatter"] },
+                        x: { type: "STRING" },
+                        y: { type: "STRING" },
+                    },
+                },
+            },
+        };
+
+        let result;
+        if (this._mock) {
+            const start = Date.now();
+            result = await this._mock.generate([{ role: "user", parts: [{ text: prompt }] }], { responseMimeType: "application/json", responseSchema: schema });
+            recordUsage({ kind: "tool", model: this.modelName, latencyMs: Date.now() - start, ok: true, usageMetadata: result.usageMetadata });
+        } else {
+            result = await this.generateContentWithRetry(
+                [{ role: "user", parts: [{ text: prompt }] }],
+                { responseMimeType: "application/json", responseSchema: schema },
+                2, "tool", signal
+            );
+        }
+        const raw = this.getText(result);
+        try { return { spec: JSON.parse(raw) || {} }; }
+        catch {
+            try { return { spec: JSON.parse((raw.match(/\{[\s\S]*\}/) || ["{}"])[0]) || {} }; }
+            catch { return { spec: null }; }
+        }
+    }
 }
 
 module.exports = new GeminiHelper();

@@ -66,3 +66,11 @@ This file contains high-signal information for agents working on the Quantum AI 
 - Transcript chunks carry `metadata.startSec/endSec/speakers`; `<source>` tags expose `start="Ns"`; chat citations show `mm:ss` chips that seek `AudioPlayerModal` (fetch-to-blob). Meeting template: `POST /api/v1/openai/meeting-minutes`.
 - Tests: `GEMINI_MOCK` handles media parts (transcript JSON, `__setTranscript`, `__mediaFiles`/`__resetMedia` for Files-API lifecycle assertions).
 - Eval: `EVAL_MONGO_DB` overrides the db name on a shared cluster (Atlas eval → `quantum_ai_eval`); eval cleans its user/files/chunks/jobs unless `--keep`. Timestamp-citation metric scores `expectsTimestamp` questions.
+
+## Multimodal & Table Analyst (Phase 3B)
+- PDFs chunk **per page** (`metadata.page`); `File.pagesWithoutText` flags scanned pages; `POST /api/v1/files/:id/reprocess` regenerates text chunks (figure/image chunks survive). pdf-parse v2: use `getText()` → `result.pages[]` — there is NO `pageIndex` option.
+- Images (png/jpg/jpeg/webp, magic-byte checked, `IMAGE_MAX_MB`) get a `describe` stage → `File.description` + `type:"image"` chunks. OCR/description text is untrusted — same `guard.js` wrapping.
+- `POST /api/v1/files/:id/deep-analysis` (`aiLimiter`, `MULTIMODAL_MAX_PAGES`, `DEEP_ANALYSIS_DAILY_CAP` TTL counter) → job `kind:"deep-analysis"` → `utils/deepAnalysis.js` slices page windows via `pdf-lib`, vision calls → `type:"figure"` chunks (scanned_text → text), resumable via `job.state.deepAnalysis.doneWindows`.
+- CSV analyst: `services/tableQuery.js` — `computeTableMeta` (streaming profile on `File.tableMeta`), `validateSpec` (allow-list columns, op/type checks, `Map`-safe keys, `contains`=substring), `executeSpec` (re-parse, row/time caps). `POST /api/v1/files/:id/ask-data` = NL→spec via `geminiHelper.planTableQuery` → validate → execute (+ optional explanation). Agent tool `analyze_table` shares the same path. **No model-written code ever executes.**
+- csv-parse 7.x and music-metadata are ESM → always `await import()`, never `require()`.
+- Env: `FEATURE_MULTIMODAL`, `GEMINI_VISION_MODEL`, `IMAGE_MAX_MB`, `MULTIMODAL_MAX_PAGES`, `DEEP_ANALYSIS_DAILY_CAP`, `DEEP_ANALYSIS_WINDOW_PAGES`, `TABLE_MAX_ROWS`, `TABLE_QUERY_TIMEOUT_MS`, `PDF_MIN_PAGE_CHARS`.

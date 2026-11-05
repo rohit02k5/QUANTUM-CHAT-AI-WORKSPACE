@@ -23,7 +23,10 @@ import DownloadIcon from "@mui/icons-material/Download";
 import ZoomInIcon from "@mui/icons-material/ZoomIn";
 import CloseIcon from "@mui/icons-material/Close";
 import AudiotrackIcon from "@mui/icons-material/Audiotrack";
+import PictureAsPdfIcon from "@mui/icons-material/PictureAsPdf";
 import AudioPlayerModal, { formatTimestamp } from "../components/AudioPlayerModal";
+import PdfViewerModal from "../components/PdfViewerModal";
+import ImageViewerModal from "../components/ImageViewerModal";
 
 const Mermaid = ({ chart }) => {
     const ref = useRef(null);
@@ -153,7 +156,7 @@ const TraceTimeline = ({ trace }) => {
     );
 };
 
-const MessageBubble = ({ role, content, sources, truncated, trace, onSeekAudio }) => {
+const MessageBubble = ({ role, content, sources, truncated, trace, onSeekAudio, onOpenPdf, onOpenImage }) => {
     const theme = useTheme();
     const isUser = role === "user";
 
@@ -252,14 +255,19 @@ const MessageBubble = ({ role, content, sources, truncated, trace, onSeekAudio }
                                 <Chip
                                     key={idx}
                                     size="small"
-                                    clickable={s.startSec != null}
-                                    onClick={s.startSec != null ? () => onSeekAudio?.(s.fileId, s.startSec) : undefined}
+                                    clickable={s.startSec != null || s.page != null || s.type === "image"}
+                                    onClick={
+                                        s.startSec != null ? () => onSeekAudio?.(s.fileId, s.startSec)
+                                            : s.type === "image" ? () => onOpenImage?.(s.fileId, s.originalName)
+                                            : s.page != null ? () => onOpenPdf?.(s.fileId, s.page, s.originalName)
+                                            : undefined
+                                    }
                                     label={`${s.originalName}${s.startSec != null ? ` ${formatTimestamp(s.startSec)}` : s.page ? ` p.${s.page}` : ""} • ${((s.score || 0) * 100).toFixed(1)}%`}
                                     variant="outlined"
                                     color={s.flagged ? "warning" : "default"}
-                                    icon={s.flagged ? <ReportProblemIcon sx={{ fontSize: 14 }} /> : s.startSec != null ? <AudiotrackIcon sx={{ fontSize: 14 }} /> : undefined}
+                                    icon={s.flagged ? <ReportProblemIcon sx={{ fontSize: 14 }} /> : s.startSec != null ? <AudiotrackIcon sx={{ fontSize: 14 }} /> : s.page != null ? <PictureAsPdfIcon sx={{ fontSize: 14 }} /> : undefined}
                                     sx={{ mr: 0.5, mb: 0.5 }}
-                                    title={s.flagged ? "This source contains instruction-like text (treated as data only)" : s.startSec != null ? `Play from ${formatTimestamp(s.startSec)}` : (s.snippet || s.originalName)}
+                                    title={s.flagged ? "This source contains instruction-like text (treated as data only)" : s.startSec != null ? `Play from ${formatTimestamp(s.startSec)}` : s.type === "image" ? "Open image" : s.page != null ? `Open at page ${s.page}` : (s.snippet || s.originalName)}
                                 />
                             )
                         )}
@@ -305,6 +313,8 @@ const Chat = () => {
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState("");
     const [audioSeek, setAudioSeek] = useState(null); // {fileId, sec} for the audio player
+    const [pdfView, setPdfView] = useState(null); // {fileId, page, name} for the PDF viewer
+    const [imageView, setImageView] = useState(null); // {fileId, name} for the image viewer
     const fileInputRef = useRef(null);
     const bottomRef = useRef(null);
 
@@ -787,7 +797,7 @@ const Chat = () => {
                             </Box>
                         )}
                         {messages.map((msg, index) => (
-                            <MessageBubble key={index} role={msg.role} content={msg.content} sources={msg.sources} truncated={msg.truncated} trace={msg.trace} onSeekAudio={(fileId, sec) => setAudioSeek({ fileId, sec })} />
+                            <MessageBubble key={index} role={msg.role} content={msg.content} sources={msg.sources} truncated={msg.truncated} trace={msg.trace} onSeekAudio={(fileId, sec) => setAudioSeek({ fileId, sec })} onOpenPdf={(fileId, page, name) => setPdfView({ fileId, page, name })} onOpenImage={(fileId, name) => setImageView({ fileId, name })} />
                         ))}
                         {loading && (
                             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -942,6 +952,19 @@ const Chat = () => {
                 fileId={audioSeek?.fileId}
                 fileName={audioSeek ? "Audio source" : ""}
                 seekSec={audioSeek?.sec}
+            />
+            <PdfViewerModal
+                open={!!pdfView}
+                onClose={() => setPdfView(null)}
+                fileId={pdfView?.fileId}
+                fileName={pdfView?.name}
+                initialPage={pdfView?.page}
+            />
+            <ImageViewerModal
+                open={!!imageView}
+                onClose={() => setImageView(null)}
+                fileId={imageView?.fileId}
+                fileName={imageView?.name}
             />
         </Box>
     );

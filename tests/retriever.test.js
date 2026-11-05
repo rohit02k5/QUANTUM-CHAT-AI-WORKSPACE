@@ -69,6 +69,31 @@ describe("retriever (cosine fallback on non-Atlas Mongo)", () => {
         await odd.deleteOne();
     });
 
+    // Regression: on Atlas, $vectorSearch against a collection without the
+    // index returns [] instead of throwing — the fallback never engaged and
+    // retrieval silently returned nothing. The retriever must check
+    // listSearchIndexes first and use cosine when the index is absent.
+    it("falls back to cosine when the search index is absent (empty listSearchIndexes)", async () => {
+        const coll = mongoose.connection.collection("chunks");
+        const origList = coll.listSearchIndexes;
+        const origAgg = coll.aggregate;
+        let vectorSearchAttempted = false;
+        coll.listSearchIndexes = () => ({ toArray: async () => [] }); // index missing
+        coll.aggregate = (pipeline) => {
+            if (pipeline?.[0]?.$vectorSearch) vectorSearchAttempted = true;
+            return origAgg.call(coll, pipeline);
+        };
+        try {
+            const res = await retrieveChunks(userId, "SIM:alpha cats", 3);
+            expect(vectorSearchAttempted).toBe(false);
+            expect(res.length).toBeGreaterThan(0);
+            expect(res[0].text).toMatch(/cats/);
+        } finally {
+            coll.listSearchIndexes = origList;
+            coll.aggregate = origAgg;
+        }
+    });
+
     it("buildContext formats citations", () => {
         const ctx = buildContext([
             { text: "hello", originalName: "doc.pdf", metadata: { page: 3 } },

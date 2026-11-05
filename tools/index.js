@@ -63,6 +63,7 @@ const registry = {
                     sourceId: i + 1,
                     fileId: c.fileId?.toString(),
                     file: c.originalName,
+                    type: c.type,
                     page: c.metadata?.page,
                     startSec: c.metadata?.startSec,
                     score: Math.round((c.score || 0) * 1000) / 1000,
@@ -81,7 +82,7 @@ const registry = {
         schema: z.object({}),
         handler: async (ctx) => {
             const files = await File.find({ user: ctx.userId, isTemp: { $ne: true } })
-                .select("originalName mimetype kind status uploadDate")
+                .select("originalName mimetype kind status uploadDate tableMeta")
                 .sort({ uploadDate: -1 })
                 .limit(50)
                 .lean();
@@ -91,6 +92,7 @@ const registry = {
                     name: f.originalName,
                     kind: f.kind || "doc",
                     status: f.status || "ready",
+                    ...(f.tableMeta?.columns?.length ? { tabular: true, columns: f.tableMeta.columns.map((c) => c.name).slice(0, 12) } : {}),
                 })),
             };
         },
@@ -180,17 +182,39 @@ const registry = {
 
     analyze_table: {
         name: "analyze_table",
-        description: "Analyze a CSV/tabular document with a structured spec (filters, groupBy, aggregations). Not yet available.",
+        description:
+            "Analyze one of the user's CSV files with a STRUCTURED spec: filters [{col,op(eq|ne|gt|gte|lt|lte|in|contains),value}], groupBy (<=3 cols), aggs [{col,fn(sum|avg|count|min|max)}] (<=5), orderBy {col,dir}, limit (<=1000), chart {type(bar|line|pie|scatter),x,y}. Use list_documents to find the CSV's id. Returns result rows — never write code.",
         parameters: {
             type: "OBJECT",
             properties: {
-                fileId: { type: "STRING" },
-                spec: { type: "OBJECT" },
+                fileId: { type: "STRING", description: "CSV document id from list_documents" },
+                spec: { type: "OBJECT", description: "Structured query spec — validated against the file's columns" },
             },
             required: ["fileId", "spec"],
         },
-        schema: z.object({ fileId: z.string(), spec: z.record(z.string(), z.any()) }),
-        handler: async () => ({ ok: false, error: "not available yet" }), // wired in Phase 3.4
+        schema: z.object({ fileId: z.string().min(1), spec: z.record(z.string(), z.any()) }),
+        handler: async (ctx, args) => {
+            const tableQuery = require("../services/tableQuery");
+            const file = await File.findOne({ _id: args.fileId, user: ctx.userId });
+            if (!file) return { ok: false, error: "document not found" };
+            if (!file.tableMeta?.columns?.length) {
+                return { ok: false, error: "not a CSV file — ask-data works on tabular uploads" };
+            }
+            const spec = tableQuery.validateSpec(args.spec, file.tableMeta);
+            const tmp = await tableQuery.csvToTemp(file);
+            try {
+                const result = await tableQuery.executeSpec(tmp, spec, file.tableMeta);
+                return {
+                    file: file.originalName,
+                    rows: result.rows.slice(0, 100),
+                    rowCount: result.rowCount,
+                    truncated: result.truncated,
+                    chartSpec: result.chartSpec,
+                };
+            } finally {
+                require("fs").unlink(tmp, () => {});
+            }
+        },
     },
 
     web_search: {

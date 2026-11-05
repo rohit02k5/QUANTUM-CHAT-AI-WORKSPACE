@@ -29,17 +29,42 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const FIXTURE_DIR = path.join(__dirname, "../evals/fixtures");
 const GOLDEN_FILE = path.join(__dirname, "../evals/golden/questions.json");
+const TABLE_FILE = path.join(__dirname, "../evals/golden-table.json");
 const AGENT_FILE = path.join(__dirname, "../evals/golden-agent.json");
 const BASELINE_FILE = path.join(__dirname, "../evals/baseline.json");
 const REPORT_DIR = path.join(__dirname, "../evals/reports");
 
 let geminiCalls = 0;
+let evalRetries = 0;
 const budget = (n = 1) => {
     if (geminiCalls + n > MAX_CALLS) {
         throw new Error(`EVAL budget exceeded (EVAL_MAX_CALLS=${MAX_CALLS})`);
     }
     geminiCalls += n;
 };
+
+// --- eval-level retry ---
+// generateContentWithRetry already walks the fallback model list, but a hard
+// quota wall (429 on every model) still surfaces. Retry the whole call with
+// exponential backoff so a momentary quota blip doesn't flake a case. Each
+// retry is counted against EVAL_MAX_CALLS and reported in evalRetries.
+const EVAL_RETRIES = parseInt(process.env.EVAL_RETRIES || "3", 10);
+const retryableRe = /429|quota|resource.?exhaust|rate.?limit|50[0-4]|unavailable|overloaded|deadline|reset/i;
+async function evalRetry(purpose, fn) {
+    for (let attempt = 1; ; attempt++) {
+        try {
+            return await fn();
+        } catch (e) {
+            const msg = String(e && e.message || e);
+            if (attempt >= EVAL_RETRIES || !retryableRe.test(msg)) throw e;
+            budget(); // the retry costs another call
+            evalRetries++;
+            const wait = Math.min(60000, 5000 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 1000);
+            console.warn(`[eval] ${purpose} attempt ${attempt} failed (${msg.slice(0, 80)}) — retry ${attempt}/${EVAL_RETRIES - 1} in ${Math.round(wait / 1000)}s`);
+            await sleep(wait);
+        }
+    }
+}
 
 // ---- LLM judge (single call/question, structured JSON) ----
 async function judge(geminiHelper, { question, answer, context, expectedFacts, unanswerable, injection }) {
@@ -60,12 +85,12 @@ ANSWER:
 ${answer}
 JSON:`;
     try {
-        const res = await geminiHelper.generateContentWithRetry(
+        const res = await evalRetry("judge", () => geminiHelper.generateContentWithRetry(
             prompt,
             { responseMimeType: "application/json" },
             2,
             "judge"
-        );
+        ));
         const text = geminiHelper.getText(res);
         const m = text.match(/\{[\s\S]*\}/);
         return JSON.parse(m ? m[0] : text);
@@ -111,6 +136,16 @@ function timestampHit(answer, windowSec) {
     return citedTimestamps(answer).some((s) => s >= lo && s <= hi);
 }
 
+// --- page citation scoring (page-aware PDF questions) ---
+// Every page number the answer cites: "p.3", "p3", "page 3", "(p. 3)".
+function citedPages(answer) {
+    const pages = new Set();
+    const a = answer || "";
+    for (const m of a.matchAll(/\bp\.\s*(\d+)\b/gi)) pages.add(parseInt(m[1], 10));
+    for (const m of a.matchAll(/\bpage\s+(\d+)\b/gi)) pages.add(parseInt(m[1], 10));
+    return [...pages];
+}
+
 async function main() {
     let mongod;
     if (USE_MEMORY) {
@@ -143,7 +178,9 @@ async function main() {
     const userId = evalUser._id;
 
     // --- ingest fixtures (reuse unless --reingest) ---
-    const fixtureFiles = fs.readdirSync(FIXTURE_DIR).filter((f) => !f.startsWith("."));
+    // .desc.json sidecars hold deterministic image descriptions — the vision
+    // call is covered by unit tests; the eval measures retrieval/answer quality.
+    const fixtureFiles = fs.readdirSync(FIXTURE_DIR).filter((f) => !f.startsWith(".") && !f.endsWith(".desc.json"));
     const fileMap = {}; // fixtureName -> fileId
     for (const fname of fixtureFiles) {
         let fileDoc = await File.findOne({ user: userId, originalName: fname });
@@ -155,6 +192,7 @@ async function main() {
         if (!fileDoc) {
             const fpath = path.join(FIXTURE_DIR, fname);
             let documents;
+            let chunkType = "text";
             if (fname.endsWith(".transcript.json")) {
                 // Audio-transcript fixture: segments -> audio-kind file -> chunks
                 // with timestamp metadata (same shape the real pipeline writes).
@@ -167,21 +205,53 @@ async function main() {
                     durationSec: Math.max(...segments.map((s) => s.endSec || 0), 0),
                     content: segments.map((s) => `[${s.speaker || ""}] (${Math.floor(s.startSec || 0)}s) ${s.text}`).join("\n"),
                 });
-            } else {
-                ({ documents } = await DataLoader.load(fpath, "text/plain"));
+            } else if (fname.endsWith(".pdf")) {
+                const res = await DataLoader.load(fpath, "application/pdf");
+                documents = res.documents;
                 fileDoc = await File.create({
                     user: userId, filename: fname, originalName: fname,
-                    path: fpath, mimetype: "text/plain",
+                    path: fpath, mimetype: "application/pdf", kind: "doc", status: "ready",
+                    pageCount: res.totalPages, pageIndexed: true,
+                    pagesWithoutText: res.pagesWithoutText?.length ? res.pagesWithoutText : undefined,
                     content: documents.map((d) => d.pageContent).join("\n\n"),
                 });
+            } else if (fname.endsWith(".png") || fname.endsWith(".jpg") || fname.endsWith(".webp")) {
+                // Image fixture: sidecar description -> image chunks
+                const { descriptionToDocs } = require("../utils/image");
+                const descPath = fpath.replace(/\.[^.]+$/, ".desc.json");
+                const desc = fs.existsSync(descPath)
+                    ? JSON.parse(fs.readFileSync(descPath, "utf8"))
+                    : { caption: `image fixture ${fname}`, tags: [] };
+                documents = descriptionToDocs(desc, fname);
+                chunkType = "image";
+                fileDoc = await File.create({
+                    user: userId, filename: fname, originalName: fname,
+                    path: fpath, mimetype: "image/png", kind: "image", status: "ready",
+                    description: desc,
+                    content: documents.map((d) => d.pageContent).join("\n\n"),
+                });
+            } else {
+                const mime = fname.endsWith(".csv") ? "text/csv" : "text/plain";
+                ({ documents } = await DataLoader.load(fpath, mime));
+                const fileFields = {
+                    user: userId, filename: fname, originalName: fname,
+                    path: fpath, mimetype: mime, status: "ready",
+                    content: documents.map((d) => d.pageContent).join("\n\n"),
+                };
+                if (mime === "text/csv") {
+                    const tableQuery = require("../services/tableQuery");
+                    fileFields.tableMeta = await tableQuery.computeTableMeta(fpath);
+                }
+                fileDoc = await File.create(fileFields);
             }
             const chunkDocs = recursiveSplitChunks(documents, { chunkSize: 1000, chunkOverlap: 200 });
             for (const cd of chunkDocs) {
                 budget();
-                const embedding = await geminiHelper.getEmbedding(cd.pageContent, { task: "document" });
+                const embedding = await evalRetry("embed", () => geminiHelper.getEmbedding(cd.pageContent, { task: "document" }));
                 await Chunk.create({
                     user: userId, file: fileDoc._id,
                     text: cd.pageContent, pageContent: cd.pageContent, metadata: cd.metadata,
+                    type: chunkType,
                     embedding, embeddingDims: embedding.length,
                     embeddingModel: process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2",
                 });
@@ -211,12 +281,12 @@ async function main() {
 
         let answer = "";
         try {
-            const res = await geminiHelper.generateContentWithRetry(
+            const res = await evalRetry("chat", () => geminiHelper.generateContentWithRetry(
                 prompt,
                 { systemInstruction },
                 2,
                 "chat"
-            );
+            ));
             answer = geminiHelper.getText(res) || "";
         } catch (e) {
             answer = `[GENERATION_FAILED: ${e.message}]`;
@@ -239,6 +309,10 @@ async function main() {
         const injSafe = q.injection ? isInjectionSafe(answer, j.followsInjection) : true;
         const abstainedCorrectly = q.unanswerable ? refused : true;
 
+        // The page the citation chip shows is the cited chunk's metadata.page —
+        // deterministic, independent of how the model phrases the text.
+        const citedChunkPage = hit ? chunks[hitRank].metadata?.page : undefined;
+
         perQuestion.push({
             question: q.question, fixture: q.fixture, hit, rr,
             faithful: j.faithfulFraction ?? 0,
@@ -248,6 +322,10 @@ async function main() {
             injection: !!q.injection, injSafe, latencyMs: ms,
             expectsTimestamp: !!q.expectsTimestamp,
             timestampCited: q.expectsTimestamp ? timestampHit(answer, q.windowSec) : undefined,
+            expectedPage: q.expectedPage,
+            citedChunkPage,
+            pageCited: q.expectedPage ? (citedChunkPage === q.expectedPage || citedPages(answer).includes(q.expectedPage)) : undefined,
+            imageQA: !!q.imageQA,
             answer: answer.slice(0, 300),
         });
         console.log(`[eval] ${hit ? "HIT " : "miss"} faith=${(j.faithfulFraction ?? 0).toFixed(2)} cov=${(j.factCoverage ?? 0).toFixed(2)} :: ${q.question.slice(0, 60)}`);
@@ -268,11 +346,11 @@ async function main() {
             const t0 = Date.now();
             let outcome;
             try {
-                outcome = await runAgent({
+                outcome = await evalRetry(`agent:${c.id}`, () => runAgent({
                     userId, chatId: null, message: c.message,
                     history: [], browse: !!c.browse,
                     emit: () => {}, signal: undefined,
-                });
+                }));
             } catch (e) {
                 outcome = { text: `[AGENT_FAILED: ${e.message}]`, trace: [], sources: [], webSources: [], stepsUsed: 0, forced: false };
             }
@@ -318,6 +396,41 @@ async function main() {
         }
     }
 
+    // --- table-analyst cases: golden specs executed by the REAL spec
+    // validator + executor against the fixture CSVs. Deterministic — the
+    // NL->spec call is covered elsewhere; here we verify the numbers.
+    const tableResults = [];
+    if (fs.existsSync(TABLE_FILE)) {
+        const tableQuery = require("../services/tableQuery");
+        const cases = JSON.parse(fs.readFileSync(TABLE_FILE, "utf8"));
+        for (const c of cases) {
+            const fileDoc = fileMap[c.file] && (await File.findById(fileMap[c.file]).lean());
+            const csvPath = path.join(FIXTURE_DIR, c.file);
+            let out;
+            try {
+                const spec = tableQuery.validateSpec(c.spec, fileDoc?.tableMeta);
+                out = await tableQuery.executeSpec(csvPath, spec, fileDoc?.tableMeta);
+            } catch (e) {
+                out = { error: e.message };
+            }
+            let ok = !out.error;
+            if (ok && c.expect?.rowCount != null) ok = out.rowCount === c.expect.rowCount;
+            if (ok && c.expect?.outputRows != null) ok = out.rows.length === c.expect.outputRows;
+            if (ok && c.expect?.rowsInclude) {
+                ok = c.expect.rowsInclude.every((want) =>
+                    out.rows.some((row) =>
+                        Object.entries(want).every(([k, v]) =>
+                            typeof v === "number" ? Math.abs((row[k] ?? NaN) - v) < 1e-6 : row[k] === v
+                        )
+                    )
+                );
+            }
+            if (ok && c.expect?.validSpecFails) ok = false; // case expected validation to fail
+            tableResults.push({ id: c.id, ok, detail: out.error || `rows=${out.rowCount}` });
+            console.log(`[eval:table] ${ok ? "ok  " : "MISS"} ${c.id} :: ${tableResults[tableResults.length - 1].detail}`);
+        }
+    }
+
     const n = perQuestion.length;
     // Empty sets -> undefined (not 0), so EVAL_ONLY subsets never register
     // false regressions for metrics they didn't measure.
@@ -331,6 +444,8 @@ async function main() {
         abstentionAccuracy: mean(perQuestion.filter((r) => r.unanswerable).map((r) => (r.abstainedCorrectly ? 1 : 0))),
         injectionSafe: mean(perQuestion.filter((r) => r.injection).map((r) => (r.injSafe ? 1 : 0))),
         timestampCitationAccuracy: mean(perQuestion.filter((r) => r.expectsTimestamp).map((r) => (r.timestampCited ? 1 : 0))),
+        pageCitationAccuracy: mean(perQuestion.filter((r) => r.expectedPage != null).map((r) => (r.pageCited ? 1 : 0))),
+        imageQAAccuracy: mean(perQuestion.filter((r) => r.imageQA).map((r) => r.factCoverage)),
         meanLatencyMs: Math.round(mean(lat)),
     };
 
@@ -344,17 +459,18 @@ async function main() {
         }
         : null;
     if (agentMetrics) metrics.agent = agentMetrics;
+    if (tableResults.length) metrics.tableQueryAccuracy = mean(tableResults.map((r) => (r.ok ? 1 : 0)));
 
     // --- report ---
     fs.mkdirSync(REPORT_DIR, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    const report = { timestamp: ts, geminiCalls, metrics, perQuestion, agentResults };
+    const report = { timestamp: ts, geminiCalls, evalRetries, metrics, perQuestion, agentResults, tableResults };
     fs.writeFileSync(path.join(REPORT_DIR, `${ts}.json`), JSON.stringify(report, null, 2));
 
     const md = [
         `# RAG Eval Report — ${ts}`,
         "",
-        `Gemini calls: ${geminiCalls} | questions: ${n} | agent cases: ${agentResults.length}`,
+        `Gemini calls: ${geminiCalls} | eval retries: ${evalRetries} | questions: ${n} | agent cases: ${agentResults.length}`,
         "",
         "| metric | value |",
         "|---|---|",
@@ -366,7 +482,7 @@ async function main() {
                 "",
                 "| metric | value |",
                 "|---|---|",
-                ...Object.entries(agentMetrics).map(([k, v]) => `| ${k} | ${v.toFixed(3)} |`),
+                ...Object.entries(agentMetrics).map(([k, v]) => `| ${k} | ${typeof v === "number" ? v.toFixed(3) : "—"} |`),
                 "",
                 "| case | tools called | steps | selection | content | injSafe |",
                 "|---|---|---|---|---|---|",

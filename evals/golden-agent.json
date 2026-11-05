@@ -56,5 +56,11 @@
     "message": "Search the web for today's top news headline.",
     "browse": false,
     "forbidTools": ["web_search"]
+  },
+  {
+    "id": "analyze-table",
+    "message": "Using my sales.csv, what is the average revenue by region?",
+    "expectTools": ["analyze_table"],
+    "mustContain": ["East", "25"]
   }
 ]

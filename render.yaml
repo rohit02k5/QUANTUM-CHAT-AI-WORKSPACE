@@ -73,6 +73,21 @@ services:
         value: "true"
       - key: FEATURE_AUDIO
         value: "true"
+      - key: FEATURE_MULTIMODAL
+        value: "true"   # image ingestion + PDF deep analysis
+      # --- multimodal caps (defaults shown; optional) ---
+      - key: IMAGE_MAX_MB
+        value: "8"
+      - key: MULTIMODAL_MAX_PAGES
+        value: "20"
+      - key: DEEP_ANALYSIS_DAILY_CAP
+        value: "3"
+      - key: PDF_MIN_PAGE_CHARS
+        value: "30"          # below this a page is flagged "scanned"
+      - key: TABLE_MAX_ROWS
+        value: "50000"
+      - key: TABLE_QUERY_TIMEOUT_MS
+        value: "10000"
       # --- ingestion / job tuning (defaults shown; optional) ---
       - key: INGEST_CONCURRENCY
         value: "1"
