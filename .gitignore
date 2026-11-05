@@ -28,3 +28,6 @@ tmp/
 
 # Eval reports (generated per-run; baseline.json is committed)
 evals/reports/
+
+# mongodb-memory-server binary cache
+.cache/

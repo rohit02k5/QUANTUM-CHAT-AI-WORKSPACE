@@ -39,6 +39,15 @@ This file contains high-signal information for agents working on the Quantum AI 
 - `utils/guard.js` wraps ALL retrieved chunks/attachments in `<source>` tags, neutralizes embedded delimiters, flags instruction-like text (→ `sources[].flagged`), and appends `GUARDRAIL_RULES` LAST in the system instruction (personas can't override). Used by sendMessage, streamMessage, and eval.
 - Personas: presets in `config/personas.js` + `/api/v1/personas` CRUD (owner-scoped); chats get `personaKey|personaId`, `pinned`, `tags` via `PATCH /api/v1/chat/:id`. Auto-title runs on the cheapest fallback model.
 - Rate limiter is env-tunable: `AI_RATE_MAX`; tests enable it with `TEST_RATE_LIMIT=1`.
+- mongodb-memory-server is pinned via `MONGOMS_VERSION` and cached at `.cache/mongodb-binaries` (CI caches this dir).
+
+## Agent Mode (Phase 2)
+- `mode:"agent"` on the stream endpoint runs `services/agent.js`: model → `functionDeclarations` → server-side tools → results back → repeat (caps: `AGENT_MAX_STEPS`, `AGENT_TIMEOUT_MS`, `AGENT_MAX_TOOLS_PER_STEP`). Limits force a tools-off final answer.
+- Tool registry is `tools/index.js` — `{name, description, parameters, schema(zod), handler(ctx,args)}`; `ctx.userId` is server-injected, never from args. Results are `<tool_result>`-wrapped + injection-scanned via `guard.js`.
+- `web_search` = separate `generateContent` call with `googleSearch` grounding (never combined with function declarations); only registered when `browse:true`; `WEB_SEARCH_DAILY_CAP` tracked in `websearchquotas` (TTL).
+- SSE adds `tool_call`/`tool_result` events; persisted `message.trace` + web sources (`{title,uri,domain}`). `FEATURE_AGENT=false` disables cleanly.
+- Tests script the model deterministically via `utils/geminiMock.js` `__setAgentScript([{functionCalls:[...]},{text}]})`.
+- `@google/genai` stays confined to `utils/geminiHelper.js` — function-calling helpers (`generateAgentTurn`, `getFunctionCalls`, `getResponseParts`) live there.
 
 ## Security Notes
 - All `/api/v1/*` routes except auth register/login/OAuth are behind `requireSignIn`.

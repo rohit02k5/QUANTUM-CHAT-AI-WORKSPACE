@@ -91,6 +91,14 @@ app.use("/api/v1/studio", aiLimiter, require("./routes/studioRoutes")); // Studi
 app.use("/api/v1/usage", require("./routes/usageRoutes"));
 app.use("/api/v1/personas", require("./routes/personaRoutes"));
 
+// Feature flags for the client (auth'd, no secrets)
+app.get("/api/v1/features", require("./middlewares/authMiddleware").requireSignIn, (req, res) => {
+  res.json({
+    agent: process.env.FEATURE_AGENT !== "false",
+    audio: process.env.FEATURE_AUDIO !== "false",
+  });
+});
+
 app.use(errorHandler);
 
 module.exports = app;
