@@ -65,7 +65,14 @@ app.get("/", (req, res) => {
 app.get("/health", require("./controllers/healthController").health);
 
 // Search Route
-app.get("/api/v1/search", require("./middlewares/authMiddleware").requireSignIn, require("./controllers/searchController").globalSearch);
+// Global search — Smart mode embeds the query, so the AI limiter applies to
+// it; Exact mode (escaped-regex) is cheap and skips it.
+app.get(
+    "/api/v1/search",
+    require("./middlewares/authMiddleware").requireSignIn,
+    (req, res, next) => (req.query.mode === "exact" ? next() : aiLimiter(req, res, next)),
+    require("./controllers/searchController").globalSearch
+);
 
 app.use("/api/v1/auth", authLimiter, authRoutes);
 app.use("/api/v1/openai", aiLimiter, require("./routes/openaiRoutes"));

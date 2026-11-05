@@ -1,0 +1,1 @@
+Garry Kasparov lost his 1997 rematch against IBM's Deep Blue 2.5 to 3.5. Deep Blue evaluated 200 million positions per second; Kasparov resigned the decisive game 6 after only 19 moves.

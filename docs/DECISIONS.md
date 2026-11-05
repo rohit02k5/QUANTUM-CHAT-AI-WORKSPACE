@@ -362,3 +362,87 @@ One short entry per phase: what was built, why, tradeoffs, and free-tier implica
   limiter. The eval fixtures deliberately use a sidecar description for
   the chart image so baseline runs don't spend calls on a path unit
   tests already cover.
+
+## Phase 4 — Retrieval quality, hybrid search, quota-aware behavior, safe deletion
+
+- **Quota classification is authoritative in `geminiHelper`.** Every Gemini
+  error is classified (`classifyError`) into `rate-limit` (per-minute —
+  retry with backoff, honoring `RetryInfo`/`"retry in Xs"` hints),
+  `daily-quota` (per-day — no same-model hammering; skip straight to the
+  next fallback model and mark it `dailyExhausted` for the rest of the
+  process), `server` (5xx — retry), `model-missing` (permanent per model —
+  skip), or `other`. All `UsageEvent`s carry the classified `errorCode`,
+  and chat/agent return a stable `{code:"AI_QUOTA_EXHAUSTED"}` + friendly
+  message when every fallback is daily-exhausted, instead of a raw 500.
+  The alternative — one generic retry loop — was burning minutes of wall
+  clock against a quota that resets tomorrow.
+- **Ingestion jobs back off quota without burning attempts.** A 429-class
+  failure requeues the job with `notBefore = now + retryAfter` and
+  `statusMessage:"Waiting for AI quota"`; `attempts` only increments on
+  real failures. The claim query requires `notBefore <= now`, so queued
+  work parks itself until quota returns instead of failing the file after
+  3 retried quota responses.
+- **Hybrid keyword leg is a regular MongoDB text index — never an Atlas
+  Search index.** M0 caps Atlas Search/Vector indexes at 3 (1 in use);
+  `$text` on `{ user: 1, text: "text" }` gives owner-scoped keyword search
+  for free (4KB index on the eval set). `default_language:"none"` stores
+  no stemmer/stopwords: the product must not silently stem non-English
+  documents, and the keyword leg is an *identifier rescue* leg, not a
+  linguistic ranker. `ensureTextIndex()` replaces any conflicting legacy
+  text index (MongoDB allows exactly one text index per collection).
+- **Hybrid fusion: RRF(k=60), strict keyword admission, lower weight.**
+  Keyword results must clear `RAG_KEYWORD_MIN_SCORE=3` (Mongo textScore ≈
+  0.58/term, so ~5+ matching terms — measured empirically) and enter RRF
+  at weight 0.5 so lexical noise can't outrank semantic hits.
+  **Measured on the 40-query stress set:** vector-only MRR 0.8725;
+  unweighted/unthresholded hybrid regressed paraphrase to 0.70 (lexical
+  noise); min-score 2 still lost near-duplicate cases; min-score 3 +
+  weight 0.5 *tied* vector-only on every category — never beat it.
+  Per the spec's own rule, `RAG_HYBRID` defaults **OFF**; it is correct,
+  tested, and one env var away for corpora where exact identifiers
+  dominate. Keyword-only MRR is 0.35 — the leg is a rescue, not a ranker.
+- **Rerank measured, not assumed.** LLM rerank of the top-15 fused
+  candidates: identical MRR (0.8725), +~430ms p50, +1 generate call per
+  query on free-tier quota. `RAG_RERANK` defaults **OFF**. The
+  implementation (guard-wrapped texts, ordered-ID structured output
+  validated as a subset of the candidates, 4s timeout, silent fallback,
+  1h Mongo cache keyed by `userId+queryHash+candidateIdsHash`, UsageEvent
+  `kind:"rerank"`) stays available and tested.
+- **Query rewriting default ON — the only measured win.** Follow-up
+  category MRR went 0.40 → 0.70 live (0.4 → 1.0 against gold rewrites);
+  overall MRR 0.8725 → 0.9175 with zero category regressions. Gated
+  (`looksContextDependent`: short/pronoun/no-entity, history exists,
+  chat mode only) so it costs ~0.15 calls per query, not 1. The model
+  emits `{needsRewrite, standalone}`; `needsRewrite:false` short-circuits
+  unchanged queries. History is truncated and passed as data; failures
+  return the original query. The stored user message is never rewritten —
+  `rewrittenQuery` is persisted on the assistant message and surfaced as
+  "Searched for: …" under the citations for transparency.
+- **Chat summaries power Smart search.** `Chat.summary` (≤300 chars) +
+  `summaryEmbedding` (same model/dims bookkeeping as chunks) refresh
+  fire-and-forget after a message lands once the chat grew ≥10 messages
+  (`SUMMARY_REFRESH_EVERY`); only truncated first/last slices are sent.
+  Smart search does in-process cosine over ≤`SEARCH_MAX_CHATS` projected
+  summary embeddings fused with title/summary keyword matches via RRF —
+  no new Atlas index, consistent with the M0 index budget. File results
+  reuse `retrieveChunks` (so a Smart query benefits from rewrite/rerank
+  config and the hybrid flag automatically).
+- **Account deletion is a registry-enforced cascade.** Every Mongoose
+  model with a `user` path must appear in `utils/accountCascade.js`'s
+  `CASCADE` array; `tests/phase4.test.js` fails the suite if any such
+  model is unregistered — a Phase 5 model can't silently orphan data.
+  Deletion requires the current password (password users) or
+  email-match + short-lived confirmation token from an authenticated
+  `POST /auth/delete-confirm` (OAuth-only users), removes GridFS blobs
+  and model-less quota collections, and sits behind `authLimiter`.
+- **Embedding cache makes evals near-free.** `getEmbedding` caches on
+  disk (`evals/.embedding-cache/`, gitignored) keyed by
+  `sha256(taskType|model|dims|text)`; cached hits don't count against
+  `EVAL_MAX_CALLS` and the run reports real vs cached calls. The
+  retrieval stress set runs generation-free (`--retrieval-only`), so the
+  daily quota only ever pays for the ~35 generation calls of the full
+  eval.
+- **Free-tier implications:** per user message the default config costs
+  ≤1 embed (retrieval) + 1 generate (answer) + ≤1 cheap rewrite call on
+  ~15% of messages + ≤1 summary call per 10 messages. Hybrid adds 0 calls;
+  rerank adds 1/query when enabled; Smart search adds 1 embed/query.

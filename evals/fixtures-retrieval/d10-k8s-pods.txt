@@ -1,0 +1,1 @@
+Every Kubernetes Pod receives its own cluster-internal IP address. Pods are ephemeral, so applications connect through a Service object that provides a stable virtual IP and DNS name across Pod restarts.

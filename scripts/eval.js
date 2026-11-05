@@ -21,6 +21,14 @@ const mongoose = require("mongoose");
 
 const USE_MEMORY = process.argv.includes("--memory");
 const REINGEST = process.argv.includes("--reingest");
+// --retrieval-only: retrieval metrics only — no generation, no judge calls.
+// The embedding cache makes reruns of unchanged fixtures free.
+const RETRIEVAL_ONLY = process.argv.includes("--retrieval-only");
+// On-disk embedding cache (gitignored): reruns cost zero embedding calls.
+// Opt out with EMBED_CACHE_DIR="".
+if (process.env.EMBED_CACHE_DIR === undefined) {
+    process.env.EMBED_CACHE_DIR = path.join(__dirname, "../evals/.embed-cache");
+}
 const MAX_CALLS = parseInt(process.env.EVAL_MAX_CALLS || "120", 10);
 const PACE_MS = parseInt(process.env.EVAL_PACE_MS || "1500", 10); // free-tier RPM pacing
 const REGRESSION_THRESHOLD = parseFloat(process.env.EVAL_REGRESSION_THRESHOLD || "0.10");
@@ -246,8 +254,11 @@ async function main() {
             }
             const chunkDocs = recursiveSplitChunks(documents, { chunkSize: 1000, chunkOverlap: 200 });
             for (const cd of chunkDocs) {
-                budget();
+                // Cached embeddings cost zero API calls — budget only the delta
+                const before = geminiHelper.calls.embed;
                 const embedding = await evalRetry("embed", () => geminiHelper.getEmbedding(cd.pageContent, { task: "document" }));
+                const realCalls = geminiHelper.calls.embed - before;
+                if (realCalls) budget(realCalls);
                 await Chunk.create({
                     user: userId, file: fileDoc._id,
                     text: cd.pageContent, pageContent: cd.pageContent, metadata: cd.metadata,
@@ -276,20 +287,23 @@ async function main() {
         // Same guard path the real chat controller uses (delimited sources +
         // guardrail system instruction), so eval measures production behavior.
         const { context, flags } = chunks.length ? guard.wrapSources(chunks) : { context: "", flags: [] };
-        const prompt = context ? guard.buildRagPrompt(q.question, context) : q.question;
-        const systemInstruction = guard.buildSystemInstruction({});
 
         let answer = "";
-        try {
-            const res = await evalRetry("chat", () => geminiHelper.generateContentWithRetry(
-                prompt,
-                { systemInstruction },
-                2,
-                "chat"
-            ));
-            answer = geminiHelper.getText(res) || "";
-        } catch (e) {
-            answer = `[GENERATION_FAILED: ${e.message}]`;
+        let j = {};
+        if (!RETRIEVAL_ONLY) {
+            const prompt = context ? guard.buildRagPrompt(q.question, context) : q.question;
+            const systemInstruction = guard.buildSystemInstruction({});
+            try {
+                const res = await evalRetry("chat", () => geminiHelper.generateContentWithRetry(
+                    prompt,
+                    { systemInstruction },
+                    2,
+                    "chat"
+                ));
+                answer = geminiHelper.getText(res) || "";
+            } catch (e) {
+                answer = `[GENERATION_FAILED: ${e.message}]`;
+            }
         }
         const ms = Date.now() - t0;
         lat.push(ms);
@@ -302,12 +316,14 @@ async function main() {
         const hit = hitRank >= 0 ? 1 : 0;
         const rr = hit ? 1 / (hitRank + 1) : 0;
 
-        budget();
-        const j = await judge(geminiHelper, { question: q.question, answer, context, expectedFacts: q.expectedFacts, unanswerable: q.unanswerable, injection: q.injection });
+        if (!RETRIEVAL_ONLY) {
+            budget();
+            j = await judge(geminiHelper, { question: q.question, answer, context, expectedFacts: q.expectedFacts, unanswerable: q.unanswerable, injection: q.injection });
+        }
         // deterministic backstops
         const refused = j.abstains || refusalRe.test(answer);
-        const injSafe = q.injection ? isInjectionSafe(answer, j.followsInjection) : true;
-        const abstainedCorrectly = q.unanswerable ? refused : true;
+        const injSafe = q.injection ? isInjectionSafe(answer, j.followsInjection) : undefined;
+        const abstainedCorrectly = q.unanswerable ? refused : undefined;
 
         // The page the citation chip shows is the cited chunk's metadata.page —
         // deterministic, independent of how the model phrases the text.
@@ -315,10 +331,10 @@ async function main() {
 
         perQuestion.push({
             question: q.question, fixture: q.fixture, hit, rr,
-            faithful: j.faithfulFraction ?? 0,
-            relevant: j.relevant ? 1 : 0,
-            factCoverage: j.factCoverage ?? 0,
-            unanswerable: !!q.unanswerable, abstained: refused, abstainedCorrectly,
+            faithful: RETRIEVAL_ONLY ? undefined : (j.faithfulFraction ?? 0),
+            relevant: RETRIEVAL_ONLY ? undefined : (j.relevant ? 1 : 0),
+            factCoverage: RETRIEVAL_ONLY ? undefined : (j.factCoverage ?? 0),
+            unanswerable: !!q.unanswerable, abstained: RETRIEVAL_ONLY ? undefined : refused, abstainedCorrectly,
             injection: !!q.injection, injSafe, latencyMs: ms,
             expectsTimestamp: !!q.expectsTimestamp,
             timestampCited: q.expectsTimestamp ? timestampHit(answer, q.windowSec) : undefined,
@@ -328,7 +344,7 @@ async function main() {
             imageQA: !!q.imageQA,
             answer: answer.slice(0, 300),
         });
-        console.log(`[eval] ${hit ? "HIT " : "miss"} faith=${(j.faithfulFraction ?? 0).toFixed(2)} cov=${(j.factCoverage ?? 0).toFixed(2)} :: ${q.question.slice(0, 60)}`);
+        console.log(`[eval] ${hit ? "HIT " : "miss"}${RETRIEVAL_ONLY ? "" : ` faith=${(j.faithfulFraction ?? 0).toFixed(2)} cov=${(j.factCoverage ?? 0).toFixed(2)}`} :: ${q.question.slice(0, 60)}`);
         await sleep(PACE_MS);
     }
 
@@ -338,7 +354,7 @@ async function main() {
     // against geminiCalls after the fact (tools' inner calls included only
     // approximately; EVAL_MAX_CALLS still bounds the RAG section exactly).
     const agentResults = [];
-    if (fs.existsSync(AGENT_FILE)) {
+    if (!RETRIEVAL_ONLY && fs.existsSync(AGENT_FILE)) {
         const { runAgent } = require("../services/agent");
         let cases = JSON.parse(fs.readFileSync(AGENT_FILE, "utf8"));
         if (ONLY.length) cases = cases.filter((c) => ONLY.some((p) => c.id.includes(p)));
@@ -434,7 +450,10 @@ async function main() {
     const n = perQuestion.length;
     // Empty sets -> undefined (not 0), so EVAL_ONLY subsets never register
     // false regressions for metrics they didn't measure.
-    const mean = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : undefined);
+    const mean = (arr) => {
+        const nums = arr.filter((v) => typeof v === "number");
+        return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : undefined;
+    };
     const metrics = {
         hitAtK: mean(perQuestion.map((r) => r.hit)),
         mrr: mean(perQuestion.map((r) => r.rr)),
@@ -464,13 +483,14 @@ async function main() {
     // --- report ---
     fs.mkdirSync(REPORT_DIR, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    const report = { timestamp: ts, geminiCalls, evalRetries, metrics, perQuestion, agentResults, tableResults };
+    const apiCalls = { ...geminiHelper.calls };
+    const report = { timestamp: ts, geminiCalls, evalRetries, apiCalls, retrievalOnly: RETRIEVAL_ONLY, metrics, perQuestion, agentResults, tableResults };
     fs.writeFileSync(path.join(REPORT_DIR, `${ts}.json`), JSON.stringify(report, null, 2));
 
     const md = [
         `# RAG Eval Report — ${ts}`,
         "",
-        `Gemini calls: ${geminiCalls} | eval retries: ${evalRetries} | questions: ${n} | agent cases: ${agentResults.length}`,
+        `Mode: ${RETRIEVAL_ONLY ? "retrieval-only" : "full"} | Gemini calls (budgeted): ${geminiCalls} | API calls: embed ${apiCalls.embed} (cached ${apiCalls.embedCached}), generate ${apiCalls.generate} | eval retries: ${evalRetries} | questions: ${n} | agent cases: ${agentResults.length}`,
         "",
         "| metric | value |",
         "|---|---|",
@@ -492,7 +512,7 @@ async function main() {
         "",
         "| question | hit | faithful | coverage | abstain | injSafe |",
         "|---|---|---|---|---|---|",
-        ...perQuestion.map((r) => `| ${r.question.slice(0, 50).replace(/\|/g, "\\|")} | ${r.hit} | ${r.faithful.toFixed(2)} | ${r.factCoverage.toFixed(2)} | ${r.abstained ? "yes" : "no"} | ${r.injSafe ? "ok" : "FAIL"} |`),
+        ...perQuestion.map((r) => `| ${r.question.slice(0, 50).replace(/\|/g, "\\|")} | ${r.hit} | ${r.faithful?.toFixed(2) ?? "—"} | ${r.factCoverage?.toFixed(2) ?? "—"} | ${r.abstained == null ? "—" : r.abstained ? "yes" : "no"} | ${r.injSafe == null ? "—" : r.injSafe ? "ok" : "FAIL"} |`),
     ].join("\n");
     fs.writeFileSync(path.join(REPORT_DIR, `${ts}.md`), md);
     console.log(`\n[eval] report: evals/reports/${ts}.md`);

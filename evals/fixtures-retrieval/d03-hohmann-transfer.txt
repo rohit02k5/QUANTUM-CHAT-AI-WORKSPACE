@@ -1,0 +1,1 @@
+A Hohmann transfer between two circular orbits uses two engine burns. The first burn raises the apoapsis of an elliptical transfer orbit; the second circularizes at the new altitude. It is the most fuel-efficient two-impulse transfer.

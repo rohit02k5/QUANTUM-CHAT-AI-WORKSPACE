@@ -43,6 +43,16 @@ mongoose.connection.once("open", async () => {
         logger.warn(`[RAG] Could not ensure vector index '${VECTOR_INDEX}' (may already exist): ${err.message}`);
     }
 
+    // Keyword leg (Phase 4.2): regular Mongo text index, compound
+    // {user:1, text:"text"} — user equality prefix keeps $text queries
+    // owner-scoped. Drops any conflicting single-field text index first.
+    try {
+        const name = await require("./utils/retriever").ensureTextIndex();
+        logger.info(`[RAG] keyword text index '${name}' ensured`);
+    } catch (err) {
+        logger.warn(`[RAG] could not ensure keyword text index: ${err.message}`);
+    }
+
     require("./utils/geminiHelper")
         .verifyConfiguredModels()
         .then((r) => {

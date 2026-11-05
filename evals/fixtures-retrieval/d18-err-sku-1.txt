@@ -1,0 +1,1 @@
+When the ingest worker reports ERR-ING-4471, the document queue has stalled on a corrupt PDF. Purge the poisoned item with `quantumctl queue purge --id <jobId>` and restart the worker; normal uploads are unaffected.

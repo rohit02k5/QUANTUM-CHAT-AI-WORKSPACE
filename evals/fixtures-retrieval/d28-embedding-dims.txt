@@ -1,0 +1,1 @@
+The embedding model returns a 768-dimensional vector. Changing EMBEDDING_DIMS requires re-embedding every chunk and rebuilding the Atlas vector index, because cosine similarity between different-dimensional vectors is undefined.

@@ -1,0 +1,348 @@
+{
+  "timestamp": "2026-11-05T06:44:59.373Z",
+  "mode": "vector",
+  "rewrite": false,
+  "config": {
+    "topK": 5,
+    "candidates": 20,
+    "rrfK": 60,
+    "minScore": 0.5
+  },
+  "perCategory": {
+    "paraphrase": {
+      "n": 10,
+      "hitAt1": 0.9,
+      "hitAt3": 1,
+      "hitAt5": 1,
+      "mrr": 0.95,
+      "p50LatencyMs": 626
+    },
+    "exact-identifier": {
+      "n": 8,
+      "hitAt1": 1,
+      "hitAt3": 1,
+      "hitAt5": 1,
+      "mrr": 1,
+      "p50LatencyMs": 610
+    },
+    "multi-document": {
+      "n": 8,
+      "hitAt1": 1,
+      "hitAt3": 1,
+      "hitAt5": 1,
+      "mrr": 1,
+      "p50LatencyMs": 521
+    },
+    "near-duplicate": {
+      "n": 8,
+      "hitAt1": 0.75,
+      "hitAt3": 1,
+      "hitAt5": 1,
+      "mrr": 0.875,
+      "p50LatencyMs": 607
+    },
+    "follow-up": {
+      "n": 6,
+      "hitAt1": 0.3333,
+      "hitAt3": 0.3333,
+      "hitAt5": 0.6667,
+      "mrr": 0.4,
+      "p50LatencyMs": 527
+    }
+  },
+  "overall": {
+    "n": 40,
+    "hitAt1": 0.825,
+    "hitAt3": 0.9,
+    "hitAt5": 0.95,
+    "mrr": 0.8725,
+    "p50LatencyMs": 586
+  },
+  "calls": {
+    "embed": 40,
+    "embedCached": 0,
+    "generate": 0
+  },
+  "details": [
+    {
+      "id": "para-01",
+      "category": "paraphrase",
+      "rank": 1,
+      "ms": 898,
+      "topFile": "6aec25d316eeff867f12e326"
+    },
+    {
+      "id": "para-02",
+      "category": "paraphrase",
+      "rank": 0,
+      "ms": 619,
+      "topFile": "6aec25d316eeff867f12e326"
+    },
+    {
+      "id": "para-03",
+      "category": "paraphrase",
+      "rank": 0,
+      "ms": 626,
+      "topFile": "6aec25d316eeff867f12e32b"
+    },
+    {
+      "id": "para-04",
+      "category": "paraphrase",
+      "rank": 0,
+      "ms": 647,
+      "topFile": "6aec25d316eeff867f12e33a"
+    },
+    {
+      "id": "para-05",
+      "category": "paraphrase",
+      "rank": 0,
+      "ms": 665,
+      "topFile": "6aec25d316eeff867f12e349"
+    },
+    {
+      "id": "para-06",
+      "category": "paraphrase",
+      "rank": 0,
+      "ms": 515,
+      "topFile": "6aec25d316eeff867f12e34e"
+    },
+    {
+      "id": "para-07",
+      "category": "paraphrase",
+      "rank": 0,
+      "ms": 620,
+      "topFile": "6aec25d316eeff867f12e35d"
+    },
+    {
+      "id": "para-08",
+      "category": "paraphrase",
+      "rank": 0,
+      "ms": 575,
+      "topFile": "6aec25d316eeff867f12e36c"
+    },
+    {
+      "id": "para-09",
+      "category": "paraphrase",
+      "rank": 0,
+      "ms": 629,
+      "topFile": "6aec25d316eeff867f12e3cb"
+    },
+    {
+      "id": "para-10",
+      "category": "paraphrase",
+      "rank": 0,
+      "ms": 595,
+      "topFile": "6aec25d316eeff867f12e3df"
+    },
+    {
+      "id": "id-01",
+      "category": "exact-identifier",
+      "rank": 0,
+      "ms": 746,
+      "topFile": "6aec25d316eeff867f12e376"
+    },
+    {
+      "id": "id-02",
+      "category": "exact-identifier",
+      "rank": 0,
+      "ms": 723,
+      "topFile": "6aec25d316eeff867f12e37b"
+    },
+    {
+      "id": "id-03",
+      "category": "exact-identifier",
+      "rank": 0,
+      "ms": 610,
+      "topFile": "6aec25d316eeff867f12e380"
+    },
+    {
+      "id": "id-04",
+      "category": "exact-identifier",
+      "rank": 0,
+      "ms": 520,
+      "topFile": "6aec25d316eeff867f12e385"
+    },
+    {
+      "id": "id-05",
+      "category": "exact-identifier",
+      "rank": 0,
+      "ms": 692,
+      "topFile": "6aec25d316eeff867f12e38a"
+    },
+    {
+      "id": "id-06",
+      "category": "exact-identifier",
+      "rank": 0,
+      "ms": 517,
+      "topFile": "6aec25d316eeff867f12e38f"
+    },
+    {
+      "id": "id-07",
+      "category": "exact-identifier",
+      "rank": 0,
+      "ms": 524,
+      "topFile": "6aec25d316eeff867f12e394"
+    },
+    {
+      "id": "id-08",
+      "category": "exact-identifier",
+      "rank": 0,
+      "ms": 549,
+      "topFile": "6aec25d316eeff867f12e3a8"
+    },
+    {
+      "id": "multi-01",
+      "category": "multi-document",
+      "rank": 0,
+      "ms": 489,
+      "topFile": "6aec25d316eeff867f12e321"
+    },
+    {
+      "id": "multi-02",
+      "category": "multi-document",
+      "rank": 0,
+      "ms": 501,
+      "topFile": "6aec25d316eeff867f12e335"
+    },
+    {
+      "id": "multi-03",
+      "category": "multi-document",
+      "rank": 0,
+      "ms": 510,
+      "topFile": "6aec25d316eeff867f12e3e4"
+    },
+    {
+      "id": "multi-04",
+      "category": "multi-document",
+      "rank": 0,
+      "ms": 586,
+      "topFile": "6aec25d316eeff867f12e3d0"
+    },
+    {
+      "id": "multi-05",
+      "category": "multi-document",
+      "rank": 0,
+      "ms": 642,
+      "topFile": "6aec25d316eeff867f12e3da"
+    },
+    {
+      "id": "multi-06",
+      "category": "multi-document",
+      "rank": 0,
+      "ms": 521,
+      "topFile": "6aec25d316eeff867f12e3c6"
+    },
+    {
+      "id": "multi-07",
+      "category": "multi-document",
+      "rank": 0,
+      "ms": 606,
+      "topFile": "6aec25d316eeff867f12e3b7"
+    },
+    {
+      "id": "multi-08",
+      "category": "multi-document",
+      "rank": 0,
+      "ms": 513,
+      "topFile": "6aec25d316eeff867f12e335"
+    },
+    {
+      "id": "dup-01",
+      "category": "near-duplicate",
+      "rank": 0,
+      "ms": 563,
+      "topFile": "6aec25d316eeff867f12e394"
+    },
+    {
+      "id": "dup-02",
+      "category": "near-duplicate",
+      "rank": 1,
+      "ms": 564,
+      "topFile": "6aec25d316eeff867f12e394"
+    },
+    {
+      "id": "dup-03",
+      "category": "near-duplicate",
+      "rank": 1,
+      "ms": 613,
+      "topFile": "6aec25d316eeff867f12e326"
+    },
+    {
+      "id": "dup-04",
+      "category": "near-duplicate",
+      "rank": 0,
+      "ms": 517,
+      "topFile": "6aec25d316eeff867f12e330"
+    },
+    {
+      "id": "dup-05",
+      "category": "near-duplicate",
+      "rank": 0,
+      "ms": 616,
+      "topFile": "6aec25d316eeff867f12e335"
+    },
+    {
+      "id": "dup-06",
+      "category": "near-duplicate",
+      "rank": 0,
+      "ms": 607,
+      "topFile": "6aec25d316eeff867f12e3d5"
+    },
+    {
+      "id": "dup-07",
+      "category": "near-duplicate",
+      "rank": 0,
+      "ms": 516,
+      "topFile": "6aec25d316eeff867f12e33f"
+    },
+    {
+      "id": "dup-08",
+      "category": "near-duplicate",
+      "rank": 0,
+      "ms": 712,
+      "topFile": "6aec25d316eeff867f12e344"
+    },
+    {
+      "id": "fu-01",
+      "category": "follow-up",
+      "rank": -1,
+      "ms": 475,
+      "topFile": "6aec25d316eeff867f12e33a"
+    },
+    {
+      "id": "fu-02",
+      "category": "follow-up",
+      "rank": 0,
+      "ms": 545,
+      "topFile": "6aec25d316eeff867f12e335"
+    },
+    {
+      "id": "fu-03",
+      "category": "follow-up",
+      "rank": 4,
+      "ms": 617,
+      "topFile": "6aec25d316eeff867f12e3b2"
+    },
+    {
+      "id": "fu-04",
+      "category": "follow-up",
+      "rank": 4,
+      "ms": 522,
+      "topFile": "6aec25d316eeff867f12e335"
+    },
+    {
+      "id": "fu-05",
+      "category": "follow-up",
+      "rank": -1,
+      "ms": 508,
+      "topFile": "6aec25d316eeff867f12e362"
+    },
+    {
+      "id": "fu-06",
+      "category": "follow-up",
+      "rank": 0,
+      "ms": 527,
+      "topFile": "6aec25d316eeff867f12e349"
+    }
+  ]
+}

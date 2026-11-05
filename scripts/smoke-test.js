@@ -180,7 +180,11 @@ async function main() {
     }
 
     // 7. delete account + verify gone
-    const del = await api("/api/v1/auth/account", { method: "DELETE" });
+    const del = await api("/api/v1/auth/account", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: USER.password }),
+    });
     ok("account deleted", del.status === 200, `status ${del.status}`);
     const verify = await api("/api/v1/files/list");
     ok("token invalidated after deletion", verify.status === 401, `status ${verify.status}`);

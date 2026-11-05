@@ -1,0 +1,1 @@
+BM25 scores a document by term frequency saturation and inverse document frequency with length normalisation. Unlike TF-IDF, repeated terms hit a diminishing ceiling set by the k1 parameter, default 1.2.

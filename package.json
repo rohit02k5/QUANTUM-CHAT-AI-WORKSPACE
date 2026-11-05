@@ -9,7 +9,8 @@
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "test": "vitest run",
     "test:watch": "vitest",
-    "eval": "node scripts/eval.js"
+    "eval": "node scripts/eval.js",
+    "eval:retrieval": "node scripts/eval-retrieval.js"
   },
   "keywords": [],
   "author": "",

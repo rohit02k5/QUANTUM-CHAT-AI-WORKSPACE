@@ -1,0 +1,1 @@
+Error ERR-AUTH-2290 means the OAuth state parameter did not match the stored nonce, usually because cookies were blocked or the user restarted the flow in a second tab. Retrying the login normally fixes it.

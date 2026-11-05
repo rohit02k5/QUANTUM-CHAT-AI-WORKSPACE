@@ -36,6 +36,13 @@ const chunkSchema = new mongoose.Schema({
 });
 
 chunkSchema.index({ user: 1, file: 1 });
-chunkSchema.index({ text: "text" }); // keyword leg for hybrid search (Phase 4)
+// Keyword leg for hybrid search: compound {user, text} so the index itself
+// enforces owner-scoping for $text queries. default_language "none" avoids
+// English-only stemming/stop-words. Only ONE text index may exist per
+// collection — ensureTextIndex() drops any conflicting one.
+chunkSchema.index(
+    { user: 1, text: "text" },
+    { name: "chunks_text_search", default_language: "none" }
+);
 
 module.exports = mongoose.model("Chunk", chunkSchema);

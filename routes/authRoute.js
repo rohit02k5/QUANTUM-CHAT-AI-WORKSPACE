@@ -10,7 +10,21 @@ router.post('/logout', logoutController)
 // --- Token Refresh ---
 router.post("/refresh", require("../controllers/authController").refreshController);
 
-// --- Account deletion (authenticated, deletes the user + all their data) ---
+// --- Current-account info (drives the delete-account UI flow) ---
+router.get(
+    "/me",
+    require("../middlewares/authMiddleware").requireSignIn,
+    require("../controllers/authController").meController
+);
+
+// --- Account deletion (authenticated, deletes the user + all their data).
+// Password users confirm with {password}; OAuth-only users confirm with
+// {confirmEmail} + a fresh {confirmToken} from the delete-token endpoint. ---
+router.post(
+    "/account/delete-token",
+    require("../middlewares/authMiddleware").requireSignIn,
+    require("../controllers/authController").issueDeletionToken
+);
 router.delete(
     "/account",
     require("../middlewares/authMiddleware").requireSignIn,

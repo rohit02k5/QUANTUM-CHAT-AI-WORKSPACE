@@ -1,0 +1,1 @@
+A MongoDB text index supports $text search with per-term stemming and stop-word removal. The returned textScore is larger when more terms match; it is a relevance signal, not a probability, and cannot be compared across queries.

@@ -34,6 +34,9 @@ const ingestionJobSchema = new mongoose.Schema(
         attempts: { type: Number, default: 0 },
         error: { type: String },
         lockedAt: { type: Date },
+        // Earliest time the job may be claimed again. Set when the daily AI
+        // quota is exhausted — the job waits instead of burning attempts.
+        notBefore: { type: Date },
         // Resumable checkpoint data — shape depends on stage:
         //   {nextChunkIndex}                 embed: first un-embedded chunk index
         //   {segments: [{index,startSec,endSec,done,segments}]}  transcribe

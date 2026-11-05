@@ -1,0 +1,1 @@
+Docker runs containers on a single host, while Kubernetes schedules containers across a cluster of nodes and adds service discovery, self-healing, and horizontal scaling that plain Docker does not provide.

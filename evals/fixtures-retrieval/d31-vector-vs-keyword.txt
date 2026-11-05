@@ -1,0 +1,1 @@
+Vector search finds semantically similar text even when words differ, but it can miss exact identifiers like error codes. Keyword search nails rare literal tokens but cannot tell that 'car' and 'automobile' are related.

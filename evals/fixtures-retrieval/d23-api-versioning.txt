@@ -1,0 +1,1 @@
+API v3.2 introduced cursor pagination and deprecated the offset parameter, which is scheduled for removal in v4.0. Clients should migrate to `?cursor=`; offsets still work but emit a deprecation header.

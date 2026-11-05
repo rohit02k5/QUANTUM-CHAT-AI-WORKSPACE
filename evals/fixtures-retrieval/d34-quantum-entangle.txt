@@ -1,0 +1,1 @@
+Entangled qubits share a joint state that cannot be factored into individual states. Measuring one member of a Bell pair instantly determines the other, though no information travels faster than light.

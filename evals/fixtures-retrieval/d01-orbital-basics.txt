@@ -1,0 +1,1 @@
+Orbital velocity for a circular low Earth orbit at 300 km altitude is about 7.7 km/s, giving an orbital period of roughly 90 minutes. Higher orbits move slower: geostationary satellites at 35,786 km travel near 3.07 km/s.

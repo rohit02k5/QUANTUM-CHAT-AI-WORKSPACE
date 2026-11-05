@@ -28,6 +28,8 @@ tmp/
 
 # Eval reports (generated per-run; baseline.json is committed)
 evals/reports/
+# On-disk embedding cache — reruns of unchanged fixtures cost zero API calls
+evals/.embed-cache/
 
 # mongodb-memory-server binary cache
 .cache/
