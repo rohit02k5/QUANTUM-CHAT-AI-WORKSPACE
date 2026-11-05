@@ -35,7 +35,7 @@ const host = (uri) => {
 /**
  * @returns {Promise<{text, trace, sources, webSources, usage, stepsUsed, forced}>}
  */
-async function runAgent({ userId, chatId, message, history, personaPrompt, browse, emit, signal }) {
+async function runAgent({ userId, chatId, message, history, personaPrompt, memoryBlock, browse, emit, signal }) {
     const deadline = Date.now() + TIMEOUT_MS();
     const trace = [];
     const sources = [];
@@ -52,7 +52,7 @@ async function runAgent({ userId, chatId, message, history, personaPrompt, brows
     const firstText = historyText ? `${historyText}\n\nUser: ${message}` : `User: ${message}`;
     const contents = [{ role: "user", parts: [{ text: firstText }] }];
 
-    const systemInstruction = guard.buildSystemInstruction({ personaPrompt }) + "\n" + AGENT_RULES;
+    const systemInstruction = guard.buildSystemInstruction({ personaPrompt, memoryBlock }) + "\n" + AGENT_RULES;
     const declarations = tools.declarations({ browse });
     const available = new Set(declarations.map((d) => d.name)); // server-side gate — browse=false blocks web_search even if the model asks
     const ctx = { userId, chatId, requestId: getRequestId(), signal };

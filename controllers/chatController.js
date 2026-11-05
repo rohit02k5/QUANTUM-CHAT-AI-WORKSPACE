@@ -48,10 +48,15 @@ function buildHistory(chat) {
  * Retrieved chunks are wrapped in <source> delimiters and flagged for
  * instruction-like text; the guardrail block is appended last.
  */
-async function prepareMessageContext(userId, chat, message, { useDocuments, documentIds, fileId }) {
+async function prepareMessageContext(userId, chat, message, { useDocuments, documentIds, fileId, memoryEnabled }) {
+    const mem = require("../utils/memory");
     let prompt = message;
     let sources = [];
     let rewrittenQuery;
+    let memoryBlock = null;
+    let usedMemories = [];
+    let usedMemoryDetails = [];
+    let queryVector = null;
 
     const hasDocs = useDocuments !== false && (await Chunk.exists({ user: userId }));
     if (hasDocs) {
@@ -64,7 +69,24 @@ async function prepareMessageContext(userId, chat, message, { useDocuments, docu
                 chat.messages.slice(0, -1).slice(-4)
             );
             if (rw.rewritten) rewrittenQuery = rw.query;
-            const chunks = await retrieveChunks(userId, rw.query, RAG_TOP_K, scopedIds);
+
+            // Memory + RAG share ONE query embedding: pull the relevant
+            // memories first (zero embed for users with none) and hand its
+            // vector to the retriever so the turn costs one embed, not two.
+            if (memoryEnabled) {
+                try {
+                    const { memories, vector } = await mem.getRelevantMemories(userId, rw.query, { withVector: true });
+                    if (vector) queryVector = vector;
+                    const built = mem.buildMemoryBlock(memories);
+                    memoryBlock = built.block;
+                    usedMemories = built.usedIds;
+                    usedMemoryDetails = built.used;
+                } catch (e) {
+                    logger.warn({ err: e.message }, "[Chat][Memory] retrieval error");
+                }
+            }
+
+            const chunks = await retrieveChunks(userId, rw.query, RAG_TOP_K, scopedIds, { queryVector });
             if (chunks.length > 0) {
                 const { context, flags } = guard.wrapSources(chunks);
                 prompt = guard.buildRagPrompt(message, context);
@@ -87,6 +109,21 @@ async function prepareMessageContext(userId, chat, message, { useDocuments, docu
         }
     }
 
+    // No-doc path (agent mode, empty KB): memory still applies — embed the
+    // raw message once. RAG retrieval doesn't run so there is no shared
+    // vector to reuse.
+    if (memoryEnabled && !hasDocs) {
+        try {
+            const memories = await mem.getRelevantMemories(userId, message);
+            const built = mem.buildMemoryBlock(memories);
+            memoryBlock = built.block;
+            usedMemories = built.usedIds;
+            usedMemoryDetails = built.used;
+        } catch (e) {
+            logger.warn({ err: e.message }, "[Chat][Memory] retrieval error");
+        }
+    }
+
     let tempFileDoc = null;
     if (fileId) {
         try {
@@ -105,8 +142,22 @@ async function prepareMessageContext(userId, chat, message, { useDocuments, docu
     }
 
     const personaPrompt = await resolvePersonaPrompt(chat);
-    const systemInstruction = guard.buildSystemInstruction({ personaPrompt });
-    return { prompt, sources, tempFileDoc, systemInstruction, rewrittenQuery };
+    const systemInstruction = guard.buildSystemInstruction({ personaPrompt, memoryBlock });
+    return { prompt, sources, tempFileDoc, systemInstruction, rewrittenQuery, memoryBlock, usedMemories, usedMemoryDetails };
+}
+
+/**
+ * Fire-and-forget post-reply work: chat-summary refresh (Phase 4.5) and
+ * long-term memory extraction (Phase 5.1). Neither may block or fail the
+ * chat response.
+ */
+function afterAssistantReply(chat, user) {
+    require("../utils/chatSummary").maybeSummarizeChat(chat._id).catch((e) =>
+        logger.warn({ err: e.message }, "[Chat] summary refresh failed"));
+    const mem = require("../utils/memory");
+    if (mem.shouldExtract(chat, user?.memoryEnabled !== false)) {
+        mem.extractMemories(chat.user, chat, { email: user?.email }).catch(() => {});
+    }
 }
 
 /** Fire-and-forget title generation on the cheapest model. Never blocks. */
@@ -189,8 +240,8 @@ exports.sendMessage = async (req, res) => {
         // Add user message to DB
         chat.messages.push({ role: "user", content: message });
 
-        const { prompt, sources, tempFileDoc, systemInstruction, rewrittenQuery } =
-            await prepareMessageContext(userId, chat, message, { useDocuments, documentIds, fileId });
+        const { prompt, sources, tempFileDoc, systemInstruction, rewrittenQuery, usedMemories, usedMemoryDetails } =
+            await prepareMessageContext(userId, chat, message, { useDocuments, documentIds, fileId, memoryEnabled: req.user.memoryEnabled !== false });
 
         const history = buildHistory(chat);
         const result = await geminiHelper.generateChatWithRetry(history, prompt, 3, { systemInstruction });
@@ -201,16 +252,19 @@ exports.sendMessage = async (req, res) => {
             content: responseText,
             sources: sources.length ? sources : undefined,
             rewrittenQuery,
+            usedMemories: usedMemories.length ? usedMemories : undefined,
         });
 
         await chat.save();
         if (isNewChat) autoTitle(chat);
-        require("../utils/chatSummary").maybeSummarizeChat(chat._id).catch((e) =>
-            logger.warn({ err: e.message }, "[Chat] summary refresh failed"));
+        require("../utils/memory").markUsed(usedMemories);
+        afterAssistantReply(chat, req.user);
         res.status(200).json({
             response: responseText, chatId: chat._id, chat,
             sources: sources.length ? sources : undefined,
             rewrittenQuery,
+            usedMemories: usedMemories.length ? usedMemories : undefined,
+            usedMemoryDetails: usedMemoryDetails.length ? usedMemoryDetails : undefined,
         });
 
         // Temp attachments are single-use: drop the record + disk file afterwards
@@ -240,6 +294,8 @@ exports.streamMessage = async (req, res) => {
     let chat = null;
     let sources = [];
     let rewrittenQuery;
+    let usedMemories = [];
+    let usedMemoryDetails = [];
     let finished = false;
     let aborted = false;
     let accumulated = "";
@@ -287,10 +343,11 @@ exports.streamMessage = async (req, res) => {
                 trace: agentTrace?.length ? agentTrace : undefined,
                 truncated: !!truncated,
                 rewrittenQuery,
+                usedMemories: usedMemories.length ? usedMemories : undefined,
             });
             await chat.save();
-            require("../utils/chatSummary").maybeSummarizeChat(chat._id).catch((e) =>
-                logger.warn({ err: e.message }, "[Chat] summary refresh failed"));
+            require("../utils/memory").markUsed(usedMemories);
+            afterAssistantReply(chat, req.user);
         } catch (e) {
             logger.error({ err: e.message }, "[Chat][stream] failed to persist assistant message");
         }
@@ -332,9 +389,12 @@ exports.streamMessage = async (req, res) => {
             useDocuments: isAgent ? false : useDocuments,
             documentIds,
             fileId,
+            memoryEnabled: req.user.memoryEnabled !== false,
         });
         sources = ctx.sources;
         rewrittenQuery = ctx.rewrittenQuery;
+        usedMemories = ctx.usedMemories;
+        usedMemoryDetails = ctx.usedMemoryDetails;
         await chat.save(); // persist user turn before streaming starts
 
         // --- SSE begins ---
@@ -344,7 +404,7 @@ exports.streamMessage = async (req, res) => {
             if (!res.writableEnded) res.write(": ping\n\n");
         }, 15000);
 
-        sendEvent({ type: "meta", chatId: chat._id, requestId: getRequestId(), sources: sources.length ? sources : undefined, rewrittenQuery });
+        sendEvent({ type: "meta", chatId: chat._id, requestId: getRequestId(), sources: sources.length ? sources : undefined, rewrittenQuery, usedMemories: usedMemories.length ? usedMemories : undefined, usedMemoryDetails: usedMemoryDetails.length ? usedMemoryDetails : undefined });
 
         // Client disconnect mid-stream: res 'close' fires when the socket is
         // gone (more reliable than req 'close' for aborted responses).
@@ -368,6 +428,7 @@ exports.streamMessage = async (req, res) => {
                 message,
                 history,
                 personaPrompt,
+                memoryBlock: ctx.memoryBlock,
                 browse: !!browse,
                 emit: sendEvent,
                 signal: abort.signal,

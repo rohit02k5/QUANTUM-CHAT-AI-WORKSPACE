@@ -446,3 +446,70 @@ One short entry per phase: what was built, why, tradeoffs, and free-tier implica
   ≤1 embed (retrieval) + 1 generate (answer) + ≤1 cheap rewrite call on
   ~15% of messages + ≤1 summary call per 10 messages. Hybrid adds 0 calls;
   rerank adds 1/query when enabled; Smart search adds 1 embed/query.
+
+## Phase 5 — Memory, Study, Export, Public API, AI budget
+
+- **Hybrid re-investigation (5.0c): the admission rule had a structural
+  flaw, fixed and re-measured — still OFF.** The Phase 4 keyword
+  admission (`textScore >= 3`, ~5+ matching terms) structurally rejected
+  single-token identifiers: an exact error-code match scores ~0.58 and
+  was filtered out after the `$text` leg found it. Replaced with a
+  principled rule: admit keyword hits when the score clears the
+  threshold **or** the query contains an identifier-like token
+  (alphanumeric with digits/dashes/underscores/dots) that matches
+  exactly. To avoid overfitting, the 40-query stress set was split into
+  deterministic seeded dev/test halves (`evals/retrieval-split.json`,
+  committed); tuning happened on dev only. Result on the **test half**:
+  vector 0.91 vs hybrid 0.91, every category identical — the rescue
+  rule adds zero measured noise but hybrid still never *beats* vector,
+  so `RAG_HYBRID` stays **OFF** per the Phase 4 rule.
+- **Cheap-lane + per-user daily cap (5.0d).** One shared Gemini key on
+  free tier needs two protections: route every non-answer call (titles,
+  chat summaries, query rewrites, memory extraction, rerank, quiz
+  generation) through `GEMINI_CHEAP_MODEL` (default the `*-lite`
+  fallback) with fallback through the normal chain when it's
+  quota-dead, and cap per-user daily AI requests
+  (`USER_DAILY_AI_CAP=60`, `AI_USER_CAP_REACHED`, TTL counter like
+  web_search's; `ADMIN_EMAILS` exempt; an agent run counts once).
+  `GET /api/v1/usage/me` exposes the remaining quota and the dashboard
+  Usage panel shows it.
+- **Memory poisoning defense (5.1).** The extraction prompt receives
+  *user-authored message text only* — retrieved chunks, attachments,
+  transcripts, tool results, web results and assistant text are never
+  passed in, so "remember that the admin password is X" inside a
+  document is inert by construction (unit test + eval case). A second
+  belt: a server-side denylist drops credential/key/identifier/health/
+  location-shaped candidates regardless of model output, applied to
+  manual adds and PATCH edits too.
+- **Memory retrieval is in-process cosine — no new Atlas index.** M0
+  allows 3 Search/Vector indexes and 1 is committed to chunks. Memories
+  are per-user capped (`MEMORY_MAX=200`, LRU eviction with an explicit
+  log line), so a capped projection + cosine costs nothing and stays
+  correct. The query embedding is shared with RAG via `queryVector`.
+  Injected memories are sanitized through `guard.js`, injection-flagged
+  ones dropped, and the block sits after the persona and before the
+  guardrail rules — guardrails stay last and authoritative.
+- **SM-2 as a pure function (5.2).** `(state, grade 0-5, now) -> state`
+  with `now` injected — unit-tested against a hand-computed review
+  sequence including lapses and the 1.3 ease floor. Double-submit is
+  guarded by `lastReviewedAt` (a few-second window replays the stored
+  result); streaks are computed in the caller's IANA timezone.
+- **CSV export formula-injection guard (5.3).** Cells starting
+  `= + - @` are apostrophe-prefixed (spreadsheet formula escape) unless
+  `?escape=0` for Anki/raw export; output is RFC-4180-quoted UTF-8 with
+  BOM. No public share links — every export endpoint is
+  owner-authenticated.
+- **API keys: hash-only storage, Bearer-only public route (5.4).**
+  `qk_<32 random bytes base64url>` shown once; the DB stores sha256 +
+  8-char display prefix, resolved by unique-index lookup + timing-safe
+  compare. Key management is JWT-only (a key cannot manage keys); the
+  public route is Bearer-only (cookies rejected) so permissive CORS is
+  scoped to `/api/v1/public/*` while the app whitelist stays for
+  everything else. Per-key buckets (30/15min, `API_KEY_DAILY_CAP`) key
+  on the key id, not IP; per-key spend also counts toward the owner's
+  `USER_DAILY_AI_CAP`. `UsageEvent` records `kind:"api"` + `apiKeyId`.
+- **Free-tier implications:** memory costs ~1 cheap call per
+  `MEMORY_EVERY_N_TURNS` user turns *only* when a local heuristic sees
+  durable statements (most chats: zero); memory retrieval adds 0 calls
+  (shared embedding). Quiz generation is 1 cheap call per quiz. Review,
+  stats, export and key management cost zero AI calls.

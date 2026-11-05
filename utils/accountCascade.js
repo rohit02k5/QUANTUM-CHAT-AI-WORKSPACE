@@ -23,7 +23,15 @@ const CASCADE = [
     { model: "FlashcardSet" },
     { model: "UsageEvent" },
     { model: "WebSearchQuota" },
-    { model: "RerankCache" }, // Phase 4.3 — model may not exist yet; skipped
+    { model: "RerankCache" },
+    // Phase 5
+    { model: "DailyAiQuota" },
+    { model: "Memory" },
+    { model: "Deck" },
+    { model: "Card" },
+    { model: "ReviewLog" },
+    { model: "QuizAttempt" },
+    { model: "ApiKey" },
     // TTL-backed daily quota docs keyed `${userId}:${YYYY-MM-DD}` (no model)
     { collection: "deepanalysisquotas", query: (uid) => ({ _id: new RegExp(`^${uid}:`) }) },
     // Account-deletion confirmation tokens keyed by user _id (no model)
@@ -62,8 +70,8 @@ async function cascadeDelete(uid) {
     }
 
     for (const entry of CASCADE) {
-        const coll = entry.model && mongoose.models[entry.model]
-            ? mongoose.model(entry.model).collection
+        const coll = entry.model
+            ? (mongoose.models[entry.model] ? mongoose.model(entry.model).collection : null)
             : entry.collection
                 ? mongoose.connection.collection(entry.collection)
                 : null;

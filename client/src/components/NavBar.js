@@ -80,6 +80,28 @@ const NavBar = () => {
         {loggedIn ? (
           <>
           <NavLink
+            to="/study"
+            style={{
+              color: "white",
+              variant: "h1",
+              textDecoration: "none",
+              marginRight: "15px",
+            }}
+          >
+            Study
+          </NavLink>
+          <NavLink
+            to="/memory"
+            style={{
+              color: "white",
+              variant: "h1",
+              textDecoration: "none",
+              marginRight: "15px",
+            }}
+          >
+            Memory
+          </NavLink>
+          <NavLink
             to="/settings"
             style={{
               color: "white",

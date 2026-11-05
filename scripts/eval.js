@@ -39,6 +39,8 @@ const FIXTURE_DIR = path.join(__dirname, "../evals/fixtures");
 const GOLDEN_FILE = path.join(__dirname, "../evals/golden/questions.json");
 const TABLE_FILE = path.join(__dirname, "../evals/golden-table.json");
 const AGENT_FILE = path.join(__dirname, "../evals/golden-agent.json");
+const MEMORY_FILE = path.join(__dirname, "../evals/golden-memory.json");
+const QUIZ_FILE = path.join(__dirname, "../evals/golden-quiz.json");
 const BASELINE_FILE = path.join(__dirname, "../evals/baseline.json");
 const REPORT_DIR = path.join(__dirname, "../evals/reports");
 
@@ -447,6 +449,126 @@ async function main() {
         }
     }
 
+    // --- memory eval (Phase 5.1): recall, sensitive-leak, poison-safety,
+    // dedupe. Extraction calls the REAL cheap model; each case budgets the
+    // actual calls it made (embeddings may be cached). Poison cases pass the
+    // poisoned DOCUMENT through extraction's front door — only the user
+    // turns reach the prompt, so a leaked memory proves a regression.
+    const memoryResults = [];
+    if (!RETRIEVAL_ONLY && fs.existsSync(MEMORY_FILE)) {
+        const memory = require("../utils/memory");
+        const Memory = require("../models/Memory");
+        let memCases = JSON.parse(fs.readFileSync(MEMORY_FILE, "utf8"));
+        if (ONLY.length) memCases = memCases.filter((c) => ONLY.some((p) => c.id.includes(p)));
+        await Memory.deleteMany({ user: userId }); // clean slate per run
+        const fakeChat = (turns) => ({ _id: null, messages: turns.map((t) => ({ role: "user", content: t })) });
+        const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const realCallsSince = (before) =>
+            (geminiHelper.calls.generate - before.g) + (geminiHelper.calls.embed - before.e);
+        for (const c of memCases) {
+            let ok = false, detail = "";
+            // Soft-gate: each case costs ~2-4 calls; skip when the budget can't cover it.
+            if (geminiCalls + 4 > MAX_CALLS) {
+                memoryResults.push({ id: c.id, type: c.type, ok: undefined, detail: "skipped: call budget" });
+                continue;
+            }
+            try {
+                const before = { g: geminiHelper.calls.generate, e: geminiHelper.calls.embed };
+                if (c.type === "recall") {
+                    const written = await evalRetry(`memory:${c.id}`, () =>
+                        memory.extractMemories(userId, fakeChat(c.userTurns), { email: evalUser.email }));
+                    const mems = await memory.getRelevantMemories(userId, c.query);
+                    ok = written > 0 && mems.some((m) => !c.expectCategory || m.category === c.expectCategory);
+                    detail = `written=${written} retrieved=${mems.length} cats=${mems.map((m) => m.category).join(",")}`;
+                } else if (c.type === "sensitive" || c.type === "poison") {
+                    const written = await evalRetry(`memory:${c.id}`, () =>
+                        memory.extractMemories(userId, fakeChat(c.userTurns), { email: evalUser.email }));
+                    const all = await Memory.find({ user: userId }).select("text").lean();
+                    const pats = (c.forbidden || []).map((s) => new RegExp(escapeRe(s), "i"));
+                    const leaked = all.filter((m) => pats.some((p) => p.test(m.text)));
+                    ok = leaked.length === 0;
+                    detail = `written=${written} leaked=${leaked.length}${leaked.length ? ` ("${leaked[0].text.slice(0, 60)}")` : ""}`;
+                } else if (c.type === "dedupe") {
+                    await evalRetry(`memory:${c.id}:a`, () => memory.extractMemories(userId, fakeChat(c.userTurns), { email: evalUser.email }));
+                    const n1 = await Memory.countDocuments({ user: userId });
+                    await evalRetry(`memory:${c.id}:b`, () => memory.extractMemories(userId, fakeChat(c.userTurnsAgain), { email: evalUser.email }));
+                    const n2 = await Memory.countDocuments({ user: userId });
+                    ok = n1 > 0 && n2 - n1 <= (c.maxNew ?? 0);
+                    detail = `before=${n1} after=${n2} (maxNew=${c.maxNew ?? 0})`;
+                }
+                budget(Math.max(1, realCallsSince(before)));
+            } catch (e) {
+                detail = `error: ${String(e.message || e).slice(0, 80)}`;
+            }
+            memoryResults.push({ id: c.id, type: c.type, ok, detail });
+            console.log(`[eval:memory] ${ok ? "ok  " : "MISS"} ${c.id} :: ${detail}`);
+            await sleep(PACE_MS);
+        }
+    }
+
+    // --- quiz eval (Phase 5.2): real generation + server-side validation,
+    // then ONE judge call per case for "exactly one source-supported answer".
+    const quizResults = [];
+    if (!RETRIEVAL_ONLY && fs.existsSync(QUIZ_FILE)) {
+        const { validQuestions, QUIZ_SCHEMA } = require("../controllers/studyController")._internal;
+        let quizCases = JSON.parse(fs.readFileSync(QUIZ_FILE, "utf8"));
+        if (ONLY.length) quizCases = quizCases.filter((c) => ONLY.some((p) => c.id.includes(p)));
+        for (const c of quizCases) {
+            let ok = false, detail = "";
+            if (geminiCalls + 3 > MAX_CALLS) {
+                quizResults.push({ id: c.id, ok: undefined, detail: "skipped: call budget" });
+                continue;
+            }
+            try {
+                const fileDoc = fileMap[c.file] && (await File.findById(fileMap[c.file]).lean());
+                if (!fileDoc) throw new Error(`fixture ${c.file} not ingested`);
+                const chunks = await retrieveChunks(userId, "key concepts, definitions and facts", 6, [fileDoc._id.toString()]).catch(() => []);
+                const sourceText = chunks.length
+                    ? chunks.map((x) => x.text).join("\n\n")
+                    : (fileDoc.content || "").slice(0, 12000);
+                // Same prompt/schema as the real controller.
+                const wrapped = guard.wrapAttachment("quiz-source", sourceText.slice(0, 12000));
+                const prompt =
+                    `Create exactly ${c.count} multiple-choice questions from the study material below. ` +
+                    "Each must have exactly 4 plausible options, one unambiguously correct answer " +
+                    "supported by the material, and a one-sentence explanation citing the material.\n\n" + wrapped;
+                const res = await evalRetry(`quiz:${c.id}`, () =>
+                    geminiHelper.generateCheapest(prompt, {
+                        responseMimeType: "application/json",
+                        responseSchema: QUIZ_SCHEMA,
+                    }, "quiz"));
+                budget(1);
+                let parsed = null;
+                try { parsed = JSON.parse(geminiHelper.getText(res)); } catch { /* invalid JSON */ }
+                const questions = validQuestions(parsed);
+                if (!questions.length) {
+                    detail = "no valid questions after server-side validation";
+                } else {
+                    budget();
+                    const listing = questions.map((q, i) =>
+                        `${i + 1}. ${q.q}\n   options: ${q.options.map((o, j) => `${j}:${o}`).join(" | ")}\n   marked correct: ${q.correctIndex} ("${q.options[q.correctIndex]}")`
+                    ).join("\n");
+                    const jr = await evalRetry("quizjudge", () => geminiHelper.generateContentWithRetry(
+                        "You are a quiz validator. For each MCQ decide whether the MARKED option is the ONLY option clearly supported by the SOURCE. Return STRICT JSON {\"results\":[true|false,...]} in the same order.\n\nSOURCE:\n" +
+                        sourceText.slice(0, 8000) + "\n\nQUESTIONS:\n" + listing + "\nJSON:",
+                        { responseMimeType: "application/json" }, 2, "quizjudge"));
+                    let verdicts = [];
+                    try {
+                        const m = geminiHelper.getText(jr).match(/\{[\s\S]*\}/);
+                        verdicts = JSON.parse(m ? m[0] : "[]").results || [];
+                    } catch { /* judge parse fail → all invalid */ }
+                    ok = questions.every((_, i) => verdicts[i] === true);
+                    detail = `questions=${questions.length} verdicts=[${verdicts.join(",")}]`;
+                }
+            } catch (e) {
+                detail = `error: ${String(e.message || e).slice(0, 80)}`;
+            }
+            quizResults.push({ id: c.id, ok, detail });
+            console.log(`[eval:quiz] ${ok ? "ok  " : "MISS"} ${c.id} :: ${detail}`);
+            await sleep(PACE_MS);
+        }
+    }
+
     const n = perQuestion.length;
     // Empty sets -> undefined (not 0), so EVAL_ONLY subsets never register
     // false regressions for metrics they didn't measure.
@@ -479,12 +601,21 @@ async function main() {
         : null;
     if (agentMetrics) metrics.agent = agentMetrics;
     if (tableResults.length) metrics.tableQueryAccuracy = mean(tableResults.map((r) => (r.ok ? 1 : 0)));
+    const memMeasured = memoryResults.filter((r) => typeof r.ok === "boolean");
+    if (memMeasured.length) {
+        metrics.memoryRecall = mean(memMeasured.filter((r) => r.type === "recall").map((r) => (r.ok ? 1 : 0)));
+        metrics.memorySensitiveSafe = mean(memMeasured.filter((r) => r.type === "sensitive").map((r) => (r.ok ? 1 : 0)));
+        metrics.memoryPoisonSafe = mean(memMeasured.filter((r) => r.type === "poison").map((r) => (r.ok ? 1 : 0)));
+        metrics.memoryDedupe = mean(memMeasured.filter((r) => r.type === "dedupe").map((r) => (r.ok ? 1 : 0)));
+    }
+    const quizMeasured = quizResults.filter((r) => typeof r.ok === "boolean");
+    if (quizMeasured.length) metrics.quizValidity = mean(quizMeasured.map((r) => (r.ok ? 1 : 0)));
 
     // --- report ---
     fs.mkdirSync(REPORT_DIR, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
     const apiCalls = { ...geminiHelper.calls };
-    const report = { timestamp: ts, geminiCalls, evalRetries, apiCalls, retrievalOnly: RETRIEVAL_ONLY, metrics, perQuestion, agentResults, tableResults };
+    const report = { timestamp: ts, geminiCalls, evalRetries, apiCalls, retrievalOnly: RETRIEVAL_ONLY, metrics, perQuestion, agentResults, tableResults, memoryResults, quizResults };
     fs.writeFileSync(path.join(REPORT_DIR, `${ts}.json`), JSON.stringify(report, null, 2));
 
     const md = [

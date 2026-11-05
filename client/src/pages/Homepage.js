@@ -95,7 +95,7 @@ const UsagePanel = () => {
     api.get("/api/v1/usage/me").then((res) => setUsage(res.data)).catch(() => setUsage(null));
   }, []);
 
-  if (!usage || !usage.totalEvents) return null;
+  if (!usage) return null;
 
   const stats = [
     { label: "AI calls (30d)", value: usage.totalEvents },
@@ -104,7 +104,11 @@ const UsagePanel = () => {
     { label: "Median latency", value: usage.latency?.p50 ? `${usage.latency.p50}ms` : "—" },
     { label: "p95 latency", value: usage.latency?.p95 ? `${usage.latency.p95}ms` : "—" },
     { label: "Failures", value: usage.failures || 0 },
-  ];
+    usage.dailyCap && usage.dailyCap.limit != null && {
+      label: "Today's AI budget",
+      value: `${usage.dailyCap.remaining}/${usage.dailyCap.limit}`,
+    },
+  ].filter(Boolean);
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.6, duration: 0.5 }}>

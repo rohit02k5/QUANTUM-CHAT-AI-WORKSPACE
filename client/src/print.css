@@ -1,0 +1,55 @@
+/* print.css — Phase 5.3 print-friendly rules for chat + study content.
+   Browser "Print → Save as PDF" uses these. */
+
+@media print {
+    /* Chrome around the content is screen-only */
+    nav, header, footer, aside,
+    .MuiAppBar-root, .MuiDrawer-root, .MuiBottomNavigation-root,
+    [role="navigation"], [role="complementary"],
+    button, .MuiButton-root, .MuiIconButton-root, .MuiFab-root,
+    input, textarea, .MuiTextField-root, form,
+    .MuiLinearProgress-root {
+        display: none !important;
+    }
+
+    body, #root, .App {
+        background: #fff !important;
+        color: #000 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+
+    /* Let papers/cards lay out flat instead of shadowed bubbles */
+    .MuiPaper-root {
+        box-shadow: none !important;
+        border: 1px solid #ddd !important;
+        background: #fff !important;
+        color: #000 !important;
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+
+    /* Keep each message / flashcard on one page where possible */
+    .MuiTypography-root { color: #000 !important; }
+    a { color: #000; text-decoration: underline; }
+    a[href^="http"]::after { content: " (" attr(href) ")"; font-size: 0.8em; }
+
+    /* Chips render as plain labels */
+    .MuiChip-root {
+        border: 1px solid #999 !important;
+        background: #fff !important;
+        color: #000 !important;
+    }
+
+    /* Code blocks keep whitespace, wrap long lines */
+    pre, code {
+        white-space: pre-wrap !important;
+        word-wrap: break-word !important;
+        font-size: 10pt !important;
+        color: #000 !important;
+        background: #f5f5f5 !important;
+    }
+
+    /* Full-width content — kill app gutters */
+    .MuiContainer-root, .MuiBox-root { max-width: 100% !important; }
+}

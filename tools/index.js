@@ -176,7 +176,25 @@ const registry = {
                 sourceChat: ctx.chatId || null,
                 cards: cards.map((c) => ({ q: String(c.q).slice(0, 1000), a: String(c.a).slice(0, 2000) })),
             });
-            return { flashcardSetId: set._id.toString(), count: set.cards.length, name: set.name };
+            // Phase 5.2: mirror into a study Deck + Cards (due immediately) so
+            // agent-generated cards are reviewable under SM-2.
+            let deckId;
+            try {
+                const Deck = require("../models/Deck");
+                const Card = require("../models/Card");
+                const deck = await Deck.create({
+                    user: ctx.userId,
+                    name: set.name,
+                    sourceFile: file?._id || undefined,
+                });
+                await Card.insertMany(
+                    set.cards.map((c) => ({ user: ctx.userId, deck: deck._id, front: c.q, back: c.a }))
+                );
+                deckId = deck._id.toString();
+            } catch (e) {
+                logger.warn({ err: e.message }, "[tools] deck mirror failed — FlashcardSet still created");
+            }
+            return { flashcardSetId: set._id.toString(), deckId, count: set.cards.length, name: set.name };
         },
     },
 

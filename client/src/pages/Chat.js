@@ -157,9 +157,19 @@ const TraceTimeline = ({ trace }) => {
     );
 };
 
-const MessageBubble = ({ role, content, sources, truncated, trace, rewrittenQuery, onSeekAudio, onOpenPdf, onOpenImage }) => {
+const MessageBubble = ({ role, content, sources, truncated, trace, rewrittenQuery, usedMemories, usedMemoryDetails, onSeekAudio, onOpenPdf, onOpenImage }) => {
     const theme = useTheme();
     const isUser = role === "user";
+    const [memOpen, setMemOpen] = useState(false);
+    const memCount = usedMemoryDetails?.length || usedMemories?.length || 0;
+    const forgetMemory = async (id) => {
+        try {
+            await axios.delete(`/api/v1/memories/${id}`);
+            toast.success("Memory forgotten");
+        } catch {
+            toast.error("Couldn't forget that memory");
+        }
+    };
 
     return (
         <motion.div
@@ -285,6 +295,36 @@ const MessageBubble = ({ role, content, sources, truncated, trace, rewrittenQuer
                         Searched for: {rewrittenQuery}
                     </Typography>
                 )}
+                {memCount > 0 && (
+                    <Box sx={{ mt: 1 }}>
+                        <Chip
+                            size="small"
+                            variant="outlined"
+                            color="secondary"
+                            clickable={!!usedMemoryDetails?.length}
+                            onClick={() => usedMemoryDetails?.length && setMemOpen((o) => !o)}
+                            label={`used ${memCount} ${memCount === 1 ? "memory" : "memories"}`}
+                            title="This reply was personalized from your saved memories"
+                        />
+                        {memOpen && usedMemoryDetails?.length > 0 && (
+                            <Box sx={{ mt: 0.5, pl: 1, borderLeft: "2px solid", borderColor: "secondary.main" }}>
+                                {usedMemoryDetails.map((m) => (
+                                    <Box key={m._id} sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                                        <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
+                                            {m.text}
+                                        </Typography>
+                                        <Typography
+                                            variant="caption" color="error" sx={{ cursor: "pointer" }}
+                                            onClick={() => forgetMemory(m._id)}
+                                        >
+                                            forget
+                                        </Typography>
+                                    </Box>
+                                ))}
+                            </Box>
+                        )}
+                    </Box>
+                )}
             </Paper>
         </motion.div>
     );
@@ -328,6 +368,8 @@ const Chat = () => {
     const [audioSeek, setAudioSeek] = useState(null); // {fileId, sec} for the audio player
     const [pdfView, setPdfView] = useState(null); // {fileId, page, name} for the PDF viewer
     const [imageView, setImageView] = useState(null); // {fileId, name} for the image viewer
+    const [memoryNotice, setMemoryNotice] = useState(false); // first-use memory notice
+    const memoryNoticeShown = useRef(false);
     const fileInputRef = useRef(null);
     const bottomRef = useRef(null);
 
@@ -338,6 +380,9 @@ const Chat = () => {
         axios.get("/api/v1/features").then(({ data }) => {
             setFeatures(data);
             if (!data.agent) setAgentMode(false);
+        }).catch(() => {});
+        axios.get("/api/v1/auth/me").then(({ data }) => {
+            memoryNoticeShown.current = !!data.user?.memoryNoticeSeen;
         }).catch(() => {});
         // Click-through from global search / external links
         const target = location.state?.chatId;
@@ -486,6 +531,14 @@ const Chat = () => {
 
     const clearFile = () => setSelectedFile(null);
 
+    // One-time notice the first time a reply is personalized from memory
+    const maybeShowMemoryNotice = (details) => {
+        if (!details?.length || memoryNoticeShown.current) return;
+        memoryNoticeShown.current = true;
+        setMemoryNotice(true);
+        axios.post("/api/v1/me/memory/notice").catch(() => {});
+    };
+
     // Poll an ingestion job until it finishes, then refresh the doc list
     const pollIngestion = async (jobId) => {
         for (let i = 0; i < 150; i++) {
@@ -509,7 +562,8 @@ const Chat = () => {
     // fails before delivering any events).
     const sendNonStream = async (body) => {
         const { data } = await axios.post("/api/v1/chat/message", body);
-        setMessages((prev) => [...prev, { role: "model", content: data.response, sources: data.sources, rewrittenQuery: data.rewrittenQuery }]);
+        setMessages((prev) => [...prev, { role: "model", content: data.response, sources: data.sources, rewrittenQuery: data.rewrittenQuery, usedMemories: data.usedMemories, usedMemoryDetails: data.usedMemoryDetails }]);
+        maybeShowMemoryNotice(data.usedMemoryDetails);
         if (!chatId) {
             setChatId(data.chatId);
             loadChatHistory();
@@ -545,6 +599,8 @@ const Chat = () => {
         let acc = "";
         let sources = null;
         let rewrittenQuery;
+        let usedMemories;
+        let usedMemoryDetails;
         let newChatId = chatId;
         let sawToken = false;
         let streamFailed = false;
@@ -559,6 +615,8 @@ const Chat = () => {
                     content: acc,
                     sources,
                     rewrittenQuery,
+                    usedMemories,
+                    usedMemoryDetails,
                     trace: liveTrace.length ? [...liveTrace] : undefined,
                     ...extra,
                 };
@@ -585,8 +643,11 @@ const Chat = () => {
                     if (evt.type === "meta") {
                         sources = evt.sources || null;
                         rewrittenQuery = evt.rewrittenQuery;
+                        usedMemories = evt.usedMemories;
+                        usedMemoryDetails = evt.usedMemoryDetails;
+                        maybeShowMemoryNotice(evt.usedMemoryDetails);
                         newChatId = evt.chatId || newChatId;
-                        setMessages((prev) => [...prev, { role: "model", content: "", sources, rewrittenQuery }]);
+                        setMessages((prev) => [...prev, { role: "model", content: "", sources, rewrittenQuery, usedMemories, usedMemoryDetails }]);
                         setLoading(false);
                     } else if (evt.type === "token") {
                         sawToken = true;
@@ -796,6 +857,13 @@ const Chat = () => {
                                 </IconButton>
                             </Tooltip>
                         )}
+                        {chatId && (
+                            <Tooltip title="Download chat as Markdown">
+                                <IconButton size="small" component="a" href={`/api/v1/export/chat/${chatId}`} download>
+                                    <DownloadIcon />
+                                </IconButton>
+                            </Tooltip>
+                        )}
                         <Button
                         variant="outlined"
                         startIcon={<AutoAwesomeIcon />}
@@ -811,13 +879,23 @@ const Chat = () => {
                 {/* Messages Area */}
                 <Paper elevation={0} sx={{ flexGrow: 1, mb: 2, p: 2, bgcolor: "transparent", overflowY: "auto", borderRadius: "12px", scrollBehavior: "smooth" }}>
                     <AnimatePresence>
+                        {memoryNotice && (
+                            <Paper sx={{ p: 1.5, mb: 2, borderLeft: "3px solid", borderColor: "secondary.main", display: "flex", alignItems: "center", gap: 1 }}>
+                                <Typography variant="body2" sx={{ flex: 1 }}>
+                                    Quantum just used a saved memory to personalize this reply. Memories are
+                                    durable facts you state in chat — never from your files. Review or delete
+                                    them anytime on the <a href="/memory">Memory page</a>.
+                                </Typography>
+                                <IconButton size="small" onClick={() => setMemoryNotice(false)}><CloseIcon fontSize="small" /></IconButton>
+                            </Paper>
+                        )}
                         {messages.length === 0 && !loading && (
                             <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%", opacity: 0.5 }}>
                                 <Typography variant="h5">Start a new conversation...</Typography>
                             </Box>
                         )}
                         {messages.map((msg, index) => (
-                            <MessageBubble key={index} role={msg.role} content={msg.content} sources={msg.sources} truncated={msg.truncated} trace={msg.trace} rewrittenQuery={msg.rewrittenQuery} onSeekAudio={(fileId, sec) => setAudioSeek({ fileId, sec })} onOpenPdf={(fileId, page, name) => setPdfView({ fileId, page, name })} onOpenImage={(fileId, name) => setImageView({ fileId, name })} />
+                            <MessageBubble key={index} role={msg.role} content={msg.content} sources={msg.sources} truncated={msg.truncated} trace={msg.trace} rewrittenQuery={msg.rewrittenQuery} usedMemories={msg.usedMemories} usedMemoryDetails={msg.usedMemoryDetails} onSeekAudio={(fileId, sec) => setAudioSeek({ fileId, sec })} onOpenPdf={(fileId, page, name) => setPdfView({ fileId, page, name })} onOpenImage={(fileId, name) => setImageView({ fileId, name })} />
                         ))}
                         {loading && (
                             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: "flex", alignItems: "center", gap: "10px" }}>

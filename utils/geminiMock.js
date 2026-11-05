@@ -74,6 +74,9 @@ let deepAnalysisScript = null; // (window?) => [{page,type,description,keyData}]
 let tableSpecScript = null; // (question?) => spec object
 let rewriteScript = null; // (prompt?) => {needsRewrite, standalone}
 let rerankScript = null; // (prompt?) => {order:[i]}
+let memoryScript = null; // (prompt?) => [{text, category}]
+let quizScript = null; // (prompt?) => [{q, options[4], correctIndex, explanation}]
+let quizJudgeScript = null; // (prompt?) => {valid:boolean, reason?}
 function __uploadMedia(buffer, mime) {
     const f = { name: `files/mock-${mediaFiles.length + 1}`, uri: `files/mock-${mediaFiles.length + 1}`, mimeType: mime, size: buffer.length, deleted: false };
     mediaFiles.push(f);
@@ -91,6 +94,9 @@ function __setDeepAnalysis(fn) { deepAnalysisScript = fn; }
 function __setTableSpec(fn) { tableSpecScript = fn; }
 function __setRewrite(fn) { rewriteScript = fn; }
 function __setRerank(fn) { rerankScript = fn; }
+function __setMemory(fn) { memoryScript = fn; }
+function __setQuiz(fn) { quizScript = fn; }
+function __setQuizJudge(fn) { quizJudgeScript = fn; }
 
 /** Find media parts + prompt text inside a contents array. */
 function mediaParts(prompt) {
@@ -211,6 +217,38 @@ function generate(prompt, config = {}) {
         });
     }
 
+    // Memory extraction calls (Phase 5.1) — prompt asks for [{text, category}]
+    if (/Extract long-term memory candidates/i.test(text)) {
+        const r = memoryScript ? memoryScript(text) : [];
+        return Promise.resolve({
+            text: JSON.stringify(r),
+            usageMetadata: { promptTokenCount: 80, candidatesTokenCount: 30 },
+        });
+    }
+
+    // Quiz generation calls (Phase 5.2) — prompt asks for MCQ JSON
+    if (/multiple-choice questions/i.test(text) || /MCQ_JSON_MARKER/i.test(text)) {
+        const r = quizScript ? quizScript(text) : [{
+            q: "What is the main topic of the source?",
+            options: ["The source topic", "Unrelated history", "Sports scores", "Cooking tips"],
+            correctIndex: 0,
+            explanation: "The question is supported by the source text.",
+        }];
+        return Promise.resolve({
+            text: JSON.stringify(r),
+            usageMetadata: { promptTokenCount: 150, candidatesTokenCount: 80 },
+        });
+    }
+
+    // Quiz judge calls (eval) — {valid, reason?}
+    if (/QUIZ_JUDGE_MARKER/i.test(text)) {
+        const r = quizJudgeScript ? quizJudgeScript(text) : { valid: true };
+        return Promise.resolve({
+            text: JSON.stringify(r),
+            usageMetadata: { promptTokenCount: 60, candidatesTokenCount: 15 },
+        });
+    }
+
     // Query-rewrite calls (Phase 4.4) — prompt asks for {needsRewrite, standalone}
     if (/needsRewrite/i.test(text)) {
         const r = rewriteScript ? rewriteScript(text) : { needsRewrite: false, standalone: "" };
@@ -281,4 +319,7 @@ module.exports = {
     __setTableSpec,
     __setRewrite,
     __setRerank,
+    __setMemory,
+    __setQuiz,
+    __setQuizJudge,
 };

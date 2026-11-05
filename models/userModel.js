@@ -11,6 +11,12 @@ const userSchema = new mongoose.Schema({
   githubId: { type: String },
   resetPasswordToken: String,
   resetPasswordExpire: Date,
+  // Phase 5.1 — long-term memory opt-out + one-time notice flag
+  memoryEnabled: {
+    type: Boolean,
+    default: () => process.env.MEMORY_DEFAULT_ON !== "false",
+  },
+  memoryNoticeSeen: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
 });
 

@@ -3,6 +3,7 @@ const multer = require("multer");
 const { uploadFile, getUserFiles, searchFiles, deleteFile, viewFile, streamIngestion, reprocessFile, getFileInfo, deepAnalysis, deepAnalysisQuota, askData } = require("../controllers/fileController");
 const { requireSignIn } = require("../middlewares/authMiddleware");
 const { aiLimiter } = require("../middlewares/rateLimits");
+const { dailyAiCap } = require("../utils/aiQuota");
 
 const router = express.Router();
 router.use(requireSignIn);
@@ -116,9 +117,9 @@ router.get("/:fileId/view", viewFile);
 router.get("/:fileId/info", getFileInfo);
 router.get("/:fileId/ingestion/stream", streamIngestion);
 router.post("/:fileId/reprocess", reprocessFile);
-router.post("/:fileId/deep-analysis", aiLimiter, deepAnalysis);
+router.post("/:fileId/deep-analysis", aiLimiter, dailyAiCap, deepAnalysis);
 router.get("/:fileId/deep-analysis/quota", deepAnalysisQuota);
-router.post("/:fileId/ask-data", aiLimiter, askData);
+router.post("/:fileId/ask-data", aiLimiter, dailyAiCap, askData);
 router.delete("/:fileId", deleteFile);
 
 module.exports = router;

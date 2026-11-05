@@ -149,7 +149,23 @@ const Studio = () => {
 
                     {flashcards.length > 0 && (
                         <Box>
-                            <Typography variant="h5" mb={2}>Flashcards</Typography>
+                            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2 }}>
+                                <Typography variant="h5">Flashcards</Typography>
+                                <Button
+                                    variant="contained" size="small" startIcon={<SchoolIcon />}
+                                    onClick={async () => {
+                                        try {
+                                            const fileId = files[files.length - 1]?.id;
+                                            const { data } = await axios.post("/api/v1/studio/flashcards/save", { fileId, cards: flashcards });
+                                            toast.success(`Saved "${data.name}" — study it on the Study page`);
+                                        } catch (e) {
+                                            toast.error(e.response?.data?.message || "Couldn't save deck");
+                                        }
+                                    }}
+                                >
+                                    Add to deck
+                                </Button>
+                            </Box>
                             <Grid container spacing={2}>
                                 {flashcards.map((card, i) => (
                                     <Grid item xs={12} sm={6} key={i}>

@@ -30,6 +30,9 @@ const MODE = (process.argv.find((a) => a.startsWith("--mode=")) || "--mode=vecto
 const USE_REWRITE = process.argv.includes("--rewrite");
 const LIVE_REWRITE = process.argv.includes("--live-rewrite");
 const USE_RERANK = process.argv.includes("--rerank");
+// Phase 5.0c: deterministic dev/test halves (evals/retrieval-split.json,
+// seed 42) — tune on --split=dev, report --split=test. Default: all.
+const SPLIT = (process.argv.find((a) => a.startsWith("--split=")) || "--split=all").split("=")[1];
 if (process.env.EMBED_CACHE_DIR === undefined) {
     process.env.EMBED_CACHE_DIR = path.join(__dirname, "../evals/.embed-cache");
 }
@@ -101,7 +104,13 @@ async function main() {
     }
 
     // --- resolve gold markers to (fileId, chunkId) ---
-    const cases = JSON.parse(fs.readFileSync(GOLD, "utf8"));
+    let cases = JSON.parse(fs.readFileSync(GOLD, "utf8"));
+    if (SPLIT !== "all") {
+        const split = JSON.parse(fs.readFileSync(path.join(__dirname, "../evals/retrieval-split.json"), "utf8"));
+        const ids = new Set(split[SPLIT] || []);
+        cases = cases.filter((c) => ids.has(c.id));
+        console.log(`[retrieval-eval] split=${SPLIT} — ${cases.length} cases`);
+    }
     for (const c of cases) {
         c.goldRefs = [];
         for (const g of c.gold) {
@@ -170,6 +179,7 @@ async function main() {
     const out = {
         timestamp: new Date().toISOString(),
         mode: MODE,
+        split: SPLIT,
         rewrite: USE_REWRITE ? "gold" : LIVE_REWRITE ? "live" : false,
         rerank: USE_RERANK,
         config: {

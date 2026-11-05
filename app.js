@@ -32,6 +32,11 @@ app.use(
   })
 );
 
+// Bearer-only public API (Phase 5.4) — mounted BEFORE the app CORS whitelist
+// and JSON parser so it gets its own permissive CORS + 16KB body limit.
+// The whitelist below is completely untouched for every other route.
+app.use("/api/v1/public", require("./routes/apiKeyRoutes").pub);
+
 const allowedOrigins = [
   "http://localhost:3000",
   "https://quantum-chat-frontend.onrender.com",
@@ -71,6 +76,8 @@ app.get(
     "/api/v1/search",
     require("./middlewares/authMiddleware").requireSignIn,
     (req, res, next) => (req.query.mode === "exact" ? next() : aiLimiter(req, res, next)),
+    // Smart search embeds the query — counts against the daily AI cap
+    (req, res, next) => (req.query.mode === "exact" ? next() : require("./utils/aiQuota").dailyAiCap(req, res, next)),
     require("./controllers/searchController").globalSearch
 );
 
@@ -82,6 +89,10 @@ app.use("/api/v1/jobs", require("./routes/jobRoutes"));
 app.use("/api/v1/studio", aiLimiter, require("./routes/studioRoutes")); // Studio Routes
 app.use("/api/v1/usage", require("./routes/usageRoutes"));
 app.use("/api/v1/personas", require("./routes/personaRoutes"));
+app.use("/api/v1", require("./routes/memoryRoutes")); // /memories* + /me/memory (Phase 5.1)
+app.use("/api/v1", require("./routes/studyRoutes")); // /study/* (Phase 5.2)
+app.use("/api/v1", require("./routes/exportRoutes")); // /export/* (Phase 5.3)
+app.use("/api/v1", require("./routes/apiKeyRoutes").mgmt); // /keys* (Phase 5.4)
 
 // Feature flags for the client (auth'd, no secrets)
 app.get("/api/v1/features", require("./middlewares/authMiddleware").requireSignIn, (req, res) => {

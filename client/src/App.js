@@ -15,6 +15,8 @@ import KnowledgeBase from './pages/KnowledgeBase';
 import ExecutiveAssistant from './pages/ExecutiveAssistant';
 import InsightEngine from './pages/InsightEngine';
 import Settings from './pages/Settings';
+import Memory from './pages/Memory';
+import Study from './pages/Study';
 import ProtectedRoute from './components/ProtectedRoute';
 
 import ErrorBoundary from './components/ErrorBoundary';
@@ -39,6 +41,8 @@ function App() {
               <Route path='executive-assistant' element={<ExecutiveAssistant />} />
               <Route path='insight-engine' element={<InsightEngine />} />
               <Route path='settings' element={<Settings />} />
+              <Route path='memory' element={<Memory />} />
+              <Route path='study' element={<Study />} />
             </Route>
 
             <Route path="/register" element={<Register />} />

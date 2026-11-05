@@ -377,3 +377,103 @@ describe("4.0c account deletion", () => {
         expect(deleted.Chunk).toBeGreaterThanOrEqual(1);
     });
 });
+
+// ---------------------------------------------------------------------------
+// 5.0c identifier-rescue keyword admission
+// ---------------------------------------------------------------------------
+describe("5.0c identifier-rescue admission", () => {
+    it("identifierTokens extracts identifier-like tokens only", () => {
+        const toks = retriever.identifierTokens("what does ERR-4021 mean in release v4.1.7 for SKU-8842-A?");
+        expect(toks).toEqual(expect.arrayContaining(["ERR-4021", "v4.1.7", "SKU-8842-A"]));
+        // plain words with no digits are not identifiers
+        expect(toks).not.toEqual(expect.arrayContaining(["what", "does", "mean", "release", "for"]));
+    });
+
+    it("single-token identifier is admitted despite a low textScore", async () => {
+        const userId = new mongoose.Types.ObjectId();
+        await retriever.ensureTextIndex();
+        // A doc whose only distinguishing term is a unique identifier. The
+        // textScore for one matched term (~0.58) is far below KEYWORD_MIN_SCORE.
+        await seedChunks(userId, ["deployment notes mention defect ERR-4021 in the scheduler"]);
+        const res = await retriever.retrieveChunks(userId, "ERR-4021", 5, [], { mode: "keyword" });
+        expect(res.length).toBeGreaterThan(0);
+        expect(res[0].text).toContain("ERR-4021");
+        expect(res[0].matchedBy).toContain("keyword");
+    });
+
+    it("identifier-rescue does not admit non-exact or substring-only matches", async () => {
+        const userId = new mongoose.Types.ObjectId();
+        await retriever.ensureTextIndex();
+        await seedChunks(userId, ["release 44.1.70 shipped last quarter"]);
+        // "4.1.7" must NOT substring-match inside "44.1.70" (boundary check)
+        const res = await retriever.retrieveChunks(userId, "4.1.7", 5, [], { mode: "keyword" });
+        expect(res).toHaveLength(0);
+        // and a digit-free weak query still gets rejected by the score rule
+        const res2 = await retriever.retrieveChunks(userId, "release", 5, [], { mode: "keyword" });
+        expect(res2).toHaveLength(0);
+    });
+
+    it("hybrid mode surfaces an identifier-only hit the vector leg missed", async () => {
+        const userId = new mongoose.Types.ObjectId();
+        await retriever.ensureTextIndex();
+        // Mock embeddings are deterministic seeded vectors — the vector leg
+        // may or may not rank this chunk; the keyword leg must rescue it and
+        // the fused result must contain it.
+        await seedChunks(userId, ["generic filler text about workflows", "the runbook for incident INC-9917 lists rollback steps"]);
+        const res = await retriever.retrieveChunks(userId, "INC-9917", 5, [], { mode: "hybrid" });
+        expect(res.some((c) => c.text.includes("INC-9917"))).toBe(true);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// 5.0d per-user daily AI cap
+// ---------------------------------------------------------------------------
+describe("5.0d daily AI cap", () => {
+    const { tryConsume, status, CAP } = require("../utils/aiQuota");
+
+    it("admits up to the cap then returns AI_USER_CAP_REACHED", async () => {
+        const u = await createUser();
+        const uid = (await mongoose.model("User").findOne({ email: u.email }))._id;
+        // Burn the cap directly (CAP is 60 by default — faster than HTTP)
+        for (let i = 0; i < CAP; i++) {
+            const r = await tryConsume(uid, u.email);
+            expect(r.allowed).toBe(true);
+        }
+        const over = await tryConsume(uid, u.email);
+        expect(over.allowed).toBe(false);
+        expect(over.remaining).toBe(0);
+        // HTTP layer returns the stable code
+        const res = await request(app).post("/api/v1/chat/message").set(auth(u.token)).send({ message: "hi" });
+        expect(res.status).toBe(429);
+        expect(res.body.code).toBe("AI_USER_CAP_REACHED");
+        // status() reports 0 remaining
+        const st = await status(uid, u.email);
+        expect(st.remaining).toBe(0);
+        expect(st.used).toBe(CAP);
+    });
+
+    it("admin emails are exempt", async () => {
+        const u = await createUser();
+        const uid = (await mongoose.model("User").findOne({ email: u.email }))._id;
+        const old = process.env.ADMIN_EMAILS;
+        process.env.ADMIN_EMAILS = u.email;
+        try {
+            for (let i = 0; i < CAP + 5; i++) {
+                const r = await tryConsume(uid, u.email);
+                expect(r.allowed).toBe(true);
+            }
+        } finally {
+            if (old === undefined) delete process.env.ADMIN_EMAILS; else process.env.ADMIN_EMAILS = old;
+        }
+    });
+
+    it("concurrent consumers cannot oversell the cap", async () => {
+        const u = await createUser();
+        const uid = (await mongoose.model("User").findOne({ email: u.email }))._id;
+        const results = await Promise.all(
+            Array.from({ length: CAP + 10 }, () => tryConsume(uid, u.email))
+        );
+        expect(results.filter((r) => r.allowed).length).toBe(CAP);
+        expect(results.filter((r) => !r.allowed).length).toBe(10);
+    });
+});
