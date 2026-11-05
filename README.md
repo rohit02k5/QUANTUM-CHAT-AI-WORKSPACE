@@ -293,22 +293,27 @@ abstention accuracy, and injection-safety**. Reports land in
 `evals/reports/`; the run fails if a metric regresses more than
 `EVAL_REGRESSION_THRESHOLD` vs `evals/baseline.json`.
 
-| metric | Phase 0 (no guardrails) | Phase 1 (guardrails on) |
-|---|---|---|
-| hit@k | 0.95 | **0.95** |
-| MRR | 0.89 | **0.93** |
-| faithfulness | 0.86 | **0.98** |
-| relevance | 0.95 | **1.00** |
-| fact coverage | 0.91 | **1.00** |
-| abstention accuracy | 0.75 | **1.00** |
-| injection-safe | 0.50 | **1.00** |
-| mean latency | 6.9s | 14.9s* |
+| metric | Phase 0 (no guardrails) | Phase 1 (guardrails on) | Phase 3B |
+|---|---|---|---|
+| hit@k | 0.95 | **0.95** | **0.97** |
+| MRR | 0.89 | **0.93** | **0.93** |
+| faithfulness | 0.86 | **0.98** | **0.95** |
+| relevance | 0.95 | **1.00** | **1.00** |
+| fact coverage | 0.91 | **1.00** | **0.97** |
+| abstention accuracy | 0.75 | **1.00** | **1.00** |
+| injection-safe | 0.50 | **1.00** | **1.00** |
+| timestamp citations | — | — | **1.00** |
+| page citations | — | — | **1.00** |
+| image QA | — | — | **1.00** |
+| table queries | — | — | **1.00** |
+| mean latency | 6.9s | 14.9s* | 9.6s* |
 
 *includes free-tier 429 back-off during the run; not regression-gated.
 
-Phase 2 agent metrics (10 cases in `evals/golden-agent.json`, same run):
-tool-selection **1.0** · avg steps **2.4** · content accuracy **1.0** ·
-abstention **1.0** · injection-safe **0.9**.
+Phase 3B agent metrics (11 cases in `evals/golden-agent.json`):
+tool-selection **1.0** · avg steps **2.5** · content accuracy **1.0** ·
+abstention **1.0** · injection-safe **1.0** — including `analyze_table`
+calling a CSV analyst over `sales.csv`.
 
 Guardrails (Phase 1): every retrieved chunk/attachment is wrapped in
 `<source>` delimiters, delimiter-like text inside sources is neutralized,
@@ -431,6 +436,62 @@ stateDiagram-v2
   openQuestions[], risks[]}` — every item carries a seekable timestamp
   chip; client-side Markdown export included.
 - `FEATURE_AUDIO=false` disables the pipeline and hides the UI.
+
+---
+
+## Multimodal ingestion — page citations, images, deep analysis
+
+- **Page-level citations**: PDFs are chunked per page — a chunk never
+  spans pages and carries `metadata.page`. Citation chips render `p.N`
+  and open an authenticated `pdfjs-dist` viewer at that page. Pages below
+  `PDF_MIN_PAGE_CHARS` are recorded on `File.pagesWithoutText`; the KB
+  card shows *"N pages look scanned — run Deep analysis to read them."*
+  PDFs ingested before page metadata get a **Reprocess** action that
+  regenerates text chunks only (figure chunks survive; a failed run keeps
+  the old index).
+- **Image ingestion** (`FEATURE_MULTIMODAL`, `IMAGE_MAX_MB=8`): png/jpg/
+  jpeg/webp, validated by **magic bytes**. A `describe` stage produces a
+  structured `{caption, ocrText, dataInsights, tags}` — stored on
+  `File.description` and embedded as `type:"image"` chunks. OCR text is
+  **untrusted**: it flows through the same `<source>` wrapping +
+  injection detector as any retrieved data (visual prompt injection is
+  real). Clicking an image citation opens the viewer showing the picture
+  beside its description and extracted text.
+- **Deep analysis** (`POST /api/v1/files/:id/deep-analysis {pageStart,
+  pageEnd}`): user-triggered vision pass that reads figures, tables,
+  charts and scanned pages in a PDF range — capped at
+  `MULTIMODAL_MAX_PAGES` (20) per run and `DEEP_ANALYSIS_DAILY_CAP` (3)
+  per user per day (TTL counter). `pdf-lib` slices ~5-page windows into
+  small PDFs for Gemini; structured output maps back to original page
+  numbers and lands as `type:"figure"` chunks (scanned_text → text
+  chunks), resumable per window and idempotent on rerun. Results are
+  citable — "what does the chart on page 4 show?" returns a `p.4` chip.
+
+## Ask your data — the CSV analyst
+
+Every CSV gets a streaming column profile at ingest (`tableMeta` —
+types, nulls, min/max/mean, top values, `TABLE_MAX_ROWS` cap).
+
+**"Ask your data"** on any CSV card asks a question in plain English:
+
+```text
+"average revenue by region as a bar chart"
+  → Gemini emits a STRUCTURED spec (never code):
+    {groupBy:["region"], aggs:[{col:"revenue",fn:"avg"}],
+     orderBy:{col:"avg_revenue",dir:"desc"}, chart:{type:"bar",...}}
+  → services/tableQuery.js validates every column/op against the
+    allow-list, then executes it in plain server code over a fresh
+    streaming parse (row + TABLE_QUERY_TIMEOUT_MS caps)
+  → {rows, rowCount, truncated, chartSpec} + a one-line explanation
+```
+
+The panel shows the generated spec collapsibly ("how I computed this"),
+the result table, and an editable-type Plotly chart. Malformed specs get
+a friendly retryable error. `analyze_table` gives the **agent** the same
+capability with identical validation and ownership checks. No
+`eval`/`Function`, no model-written queries, `contains` is a substring
+never a RegExp, and group keys are `Map`-safe against `__proto__`
+columns.
 
 ---
 ## Local Setup

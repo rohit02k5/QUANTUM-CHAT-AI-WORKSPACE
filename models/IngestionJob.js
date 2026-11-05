@@ -12,6 +12,14 @@ const ingestionJobSchema = new mongoose.Schema(
     {
         user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
         file: { type: mongoose.Schema.Types.ObjectId, ref: "File", required: true },
+        // Job kind: "ingest" (default upload pipeline), "reprocess" (regenerate
+        // text chunks e.g. for page metadata — prunes text chunks, never touches
+        // figure/image), "deep-analysis" (3B.3 vision pass over a page range).
+        kind: {
+            type: String,
+            enum: ["ingest", "reprocess", "deep-analysis"],
+            default: "ingest",
+        },
         status: {
             type: String,
             enum: ["queued", "processing", "done", "failed"],

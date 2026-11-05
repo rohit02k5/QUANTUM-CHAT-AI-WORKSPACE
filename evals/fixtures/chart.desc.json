@@ -1,0 +1,11 @@
+{
+  "caption": "A bar chart titled Quarterly Revenue showing four blue bars rising left to right.",
+  "ocrText": "Quarterly Revenue Q1 10 Q2 14 Q3 19 Q4 27",
+  "dataInsights": "Revenue grows every quarter, more than doubling from 10 in Q1 to 27 in Q4.",
+  "tags": [
+    "chart",
+    "bar",
+    "revenue",
+    "quarterly"
+  ]
+}

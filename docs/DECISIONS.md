@@ -266,3 +266,99 @@ One short entry per phase: what was built, why, tradeoffs, and free-tier implica
 - `music-metadata` v12 added (its dependency `file-type` is only
   vulnerability-free at v12+); loaded via dynamic `import()` since the
   codebase is CommonJS.
+
+## Phase 3B — Multimodal ingestion, page citations, table analyst
+
+- **Silent-empty `$vectorSearch` bug (found only on real Atlas):** MongoDB
+  returns `[]` — not an error — when `$vectorSearch` runs against a
+  collection that lacks the named index, so the try/catch cosine fallback
+  never engaged and any non-primary DB silently retrieved nothing. Found
+  while evaluating `quantum_ai_eval` (every question missed, zero errors).
+  Fixed by checking `listSearchIndexes` before attempting vector search
+  (positive verdicts only are cached, so a later-created index is picked
+  up). Regression test stubs `listSearchIndexes` to `[]` and asserts the
+  aggregation is never attempted. Invisible to unit mocks — this class of
+  bug is why the Atlas checklist exists.
+- **Upload memory profile:** multer `diskStorage` already streamed bodies
+  to disk, but `persistToGridFS`, the audio sniff and `extractDocs` each
+  loaded whole files into RAM (≤26MB per request — meaningful on Render's
+  512MB). Now: `gridfs.savePath` streams the temp file into GridFS, audio
+  sniffing reads a 64-byte head and `music-metadata` `parseFile` streams
+  duration, and `extractDocs` pipes GridFS→tmp for parsing.
+- **Per-type caps enforced early:** `fileFilter` rejects via declared
+  `Content-Length` against per-type caps (docs 10MB, audio `AUDIO_MAX_MB`,
+  images `IMAGE_MAX_MB`) *before* bytes stage to disk — a 25MB `.txt` is
+  refused at request start, not after writing 25MB. Global multer limit
+  remains the outer bound; the controller re-checks post-staging as a
+  belt-and-braces layer.
+- **Eval robustness:** `evalRetry` wraps every eval Gemini call — quota
+  walls (429 across all fallback models) retry with exponential backoff,
+  counted against `EVAL_MAX_CALLS` and reported as `evalRetries`, so a
+  momentary free-tier blip can no longer flake a case.
+- **MRR 0.93→0.86 finding:** fixture dilution, not a retriever regression.
+  All drops are `meeting_notes.txt` questions whose expected chunk fell to
+  rank 2 because the new `meeting_audio.transcript.json` fixture is
+  thematically identical (a meeting about the same project) and now
+  competes inside `topK=3`. hit@k improved 0.9545→0.9615; the same corpus
+  scored 0.9167 on Atlas. No parameter tuning — raising topK just to bump
+  the number would weaken precision where it matters.
+- **Per-page chunking was almost free — but the loader lied:** the
+  LangChain-style splitter already preserves per-Document boundaries, so
+  making `pdf-parse` emit one Document per page gave `metadata.page` on
+  every chunk for free. In doing that we found `parser.getText({
+  pageIndex })` is not a real pdf-parse v2 API — it silently returned the
+  whole document for every page (duplicated chunks, no scanned-page
+  detection). Fixed to a single `getText()` pass indexing `result.pages`,
+  plus `standardFontDataUrl` pointing at `pdfjs-dist/standard_fonts` so
+  PDFs that use the 14 unembedded standard fonts still extract. Pages
+  under `PDF_MIN_PAGE_CHARS` are recorded on `File.pagesWithoutText` —
+  the UI surfaces a scanned-page hint offering Deep analysis.
+- **`/reprocess` preserves availability:** it upserts the new page-aware
+  chunks first and prunes stale `type:"text"` chunks only after the new
+  ones are embedded (stale = `seq >= newCount`). A failed reprocess keeps
+  the old index intact; figure/image chunks live under separate keys and
+  are never touched.
+- **Vision outputs are untrusted data.** Image `describe` output
+  (caption + OCR text + insights) becomes `type:"image"` chunks — 1–3 per
+  image — and reaches the model only through the same `<source>` wrapping
+  + injection detector as any retrieved text (visual prompt injection is
+  real: "IGNORE ALL INSTRUCTIONS" rendered inside a photo must be data).
+  The original bytes are stored untouched in GridFS; the inline copy sent
+  to Gemini stays within inline limits, Files API above that, media
+  deleted in `finally`.
+- **Deep analysis slices, then checks, per ~5-page window.** `pdf-lib`
+  copies the requested range into a small PDF per window (inline ≤10MB,
+  Files API otherwise, always deleted). Structured output is
+  slice-relative and mapped back to original page numbers; items outside
+  the requested window are dropped (also covers the whole-PDF fallback
+  when slicing fails). Windows checkpoint into `job.state.deepAnalysis`
+  (`doneWindows` + accumulated `items`), so a restart resumes mid-range —
+  chunks upsert keyed `(file, type, page, deepIdx)` making reruns
+  idempotent. scanned_text items land as `type:"text"` chunks; everything
+  else is `type:"figure"` with `figureType` metadata.
+- **Daily quota via TTL counter.** `deepanalysisquotas` keyed
+  `userId:YYYY-MM-DD` with a lazily-created TTL index — same pattern as
+  the web-search cap, no schema change needed, self-cleaning.
+- **Table analyst: structured spec, never generated code.** The model
+  only emits a declarative spec (`filters/groupBy/aggs/orderBy/limit/
+  chart`); `services/tableQuery.js` validates every column against the
+  `tableMeta` allow-list, checks op/type compatibility, clamps `limit` to
+  1000 and executes in plain server code over a fresh streaming parse
+  (row + time caps). No `eval`/`Function`, no query strings from model
+  text; `contains` is a case-insensitive substring — never a RegExp.
+  Group keys are `JSON.stringify`ed and stored in `Map`s so a column
+  literally named `__proto__` is safe. Malformed specs return 422
+  `retryable:true` — the client (and the agent) can rephrase. This is the
+  same "model proposes, code disposes" boundary the agent tool registry
+  already enforced; the alternative (NL→Mongo aggregation pipelines or
+  generated JS) trades a one-prompt UX win for an injection surface with
+  no allow-list.
+- **csv-parse 7 + dynamic `import()`:** the initial pin hit a moderate
+  prototype-pollution advisory (`<7.0.2`, columns path); 7.x is ESM-only,
+  loaded via `import("csv-parse")` like `music-metadata`.
+- **Free-tier implications:** deep analysis is bounded by page cap ×
+  daily cap (each window is one vision call); ask-data is 1 spec call +
+  1 short explanation call; image describe is 1 call — all behind the AI
+  limiter. The eval fixtures deliberately use a sidecar description for
+  the chart image so baseline runs don't spend calls on a path unit
+  tests already cover.

@@ -115,6 +115,7 @@ async function runAgent({ userId, chatId, message, history, personaPrompt, brows
                     sources.push({
                         fileId: c.fileId,
                         originalName: c.file,
+                        type: c.type,
                         page: c.page,
                         startSec: c.startSec,
                         score: c.score,

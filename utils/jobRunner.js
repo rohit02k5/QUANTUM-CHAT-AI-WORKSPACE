@@ -61,10 +61,19 @@ async function setStage(job, stage, progress) {
 async function extractDocs(file, buffer) {
     const ext = path.extname(file.originalName || "") || ".bin";
     const tmp = path.join(os.tmpdir(), `ingest-${file._id}-${Date.now()}${ext}`);
-    fs.writeFileSync(tmp, buffer);
+    // Stream GridFS -> tmp when possible so large docs never sit in RAM whole.
+    if (file.gridfsId) {
+        await new Promise((resolve, reject) => {
+            const ws = fs.createWriteStream(tmp);
+            gridfs.openDownloadStream(file.gridfsId).on("error", reject).pipe(ws);
+            ws.on("error", reject).on("finish", resolve);
+        });
+    } else {
+        fs.writeFileSync(tmp, buffer || (await getFileBytes(file)));
+    }
     try {
-        const { documents } = await DataLoader.load(tmp, file.mimetype);
-        return documents;
+        const res = await DataLoader.load(tmp, file.mimetype);
+        return res;
     } finally {
         fs.unlink(tmp, () => {});
     }
@@ -128,13 +137,34 @@ async function embedBatchWithBackoff(texts) {
 async function processJob(job) {
     const file = await File.findById(job.file);
     if (!file) throw new Error("file no longer exists");
+
+    if (job.kind === "deep-analysis") {
+        const { runDeepAnalysis } = require("./deepAnalysis");
+        return runDeepAnalysis(job, file);
+    }
+
     file.status = "processing";
     await file.save();
 
-    const buffer = await getFileBytes(file);
+    // Reprocess regenerates TEXT chunks — stale ones are pruned AFTER the new
+    // embeds upsert (seq >= new count), so a failed reprocess keeps old chunks.
+    // Figure/image chunks are keyed separately and never touched.
+
+    // Bytes are fetched lazily — docs stream GridFS->tmp in extractDocs; audio
+    // and images need the whole buffer (Gemini inline part / Files API upload).
+    const buffer = file.kind === "audio" || file.kind === "image" ? await getFileBytes(file) : null;
     let docs;
 
-    if (file.kind === "audio") {
+    if (file.kind === "image") {
+        await setStage(job, "describe", 20);
+        const { descriptionToDocs } = require("./image");
+        const desc = await geminiHelper.describeImage(buffer, { mime: file.mimetype });
+        file.description = { caption: desc.caption, ocrText: desc.ocrText, dataInsights: desc.dataInsights, tags: desc.tags };
+        file.content = [desc.caption, desc.ocrText, desc.dataInsights].filter(Boolean).join("\n\n");
+        docs = descriptionToDocs(desc, file.originalName);
+        docs.forEach((d) => { d.metadata.type = "image"; });
+        await setStage(job, "chunk", 55);
+    } else if (file.kind === "audio") {
         await setStage(job, "transcribe", 10);
         const duration = file.durationSec ?? (await audio.durationSec(buffer, file.mimetype));
         if (duration) { file.durationSec = duration; }
@@ -146,16 +176,42 @@ async function processJob(job) {
         await setStage(job, "chunk", 55);
     } else {
         await setStage(job, "extract", 10);
-        docs = await extractDocs(file, buffer);
+        const res = await extractDocs(file, buffer);
+        docs = res.documents;
         file.content = docs.map((d) => d.pageContent).join("\n\n");
+        // PDF page awareness — scanned pages get a UI hint + Deep analysis offer
+        if (file.mimetype === "application/pdf") {
+            file.pageCount = res.totalPages || docs.length || undefined;
+            file.pagesWithoutText = res.pagesWithoutText?.length ? res.pagesWithoutText : undefined;
+            file.pageIndexed = true;
+        }
+        // CSV column profile for the table analyst — streamed, capped at
+        // TABLE_MAX_ROWS. Failure here must not fail ingestion.
+        if (/csv|ms-excel/i.test(file.mimetype || "")) {
+            try {
+                const tableQuery = require("../services/tableQuery");
+                const tmpCsv = await tableQuery.csvToTemp(file);
+                try {
+                    file.tableMeta = await tableQuery.computeTableMeta(tmpCsv);
+                } finally {
+                    fs.unlink(tmpCsv, () => {});
+                }
+            } catch (e) {
+                log().warn({ err: e.message, file: file._id.toString() }, "tableMeta profiling failed — RAG chunks unaffected");
+            }
+        }
         await setStage(job, "chunk", 40);
     }
 
     if (!docs.length) throw new Error("no text could be extracted from this file");
     await file.save();
 
-    const chunkDocs = recursiveSplitChunks(docs, { chunkSize: 1000, chunkOverlap: 200 });
+    // Image descriptions are already chunk-sized docs; text pipelines split.
+    const chunkDocs = file.kind === "image"
+        ? docs
+        : recursiveSplitChunks(docs, { chunkSize: 1000, chunkOverlap: 200 });
     chunkDocs.forEach((c, i) => { c.metadata.seq = i; });
+    const chunkType = file.kind === "image" ? "image" : "text";
 
     // Embed + upsert — resumes at job.state.nextSeq; upserts make it idempotent
     await setStage(job, "embed", Math.max(job.progress, 50));
@@ -178,7 +234,7 @@ async function processJob(job) {
                         embedding: emb,
                         embeddingModel: geminiHelper.embeddingModel,
                         embeddingDims: emb.length,
-                        type: "text",
+                        type: chunkType,
                     },
                 },
                 { upsert: true }
@@ -188,6 +244,14 @@ async function processJob(job) {
         job.markModified("state");
         job.progress = 50 + Math.round((job.state.nextSeq / chunkDocs.length) * 45);
         await job.save();
+    }
+
+    if (job.kind === "reprocess") {
+        await Chunk.deleteMany({
+            file: file._id,
+            $or: [{ type: "text" }, { type: { $exists: false } }],
+            "metadata.seq": { $gte: chunkDocs.length },
+        });
     }
 
     await setStage(job, "index", 96);

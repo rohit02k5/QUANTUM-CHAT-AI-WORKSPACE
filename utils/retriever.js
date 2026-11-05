@@ -101,6 +101,7 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = []) {
                     text: 1,
                     pageContent: 1,
                     metadata: 1,
+                    type: 1,
                     fileId: "$file",
                     originalName: { $arrayElemAt: ["$fileDoc.originalName", 0] },
                     score: { $meta: "vectorSearchScore" },

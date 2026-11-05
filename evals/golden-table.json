@@ -1,0 +1,50 @@
+[
+  {
+    "id": "avg-revenue-by-region",
+    "file": "sales.csv",
+    "spec": {
+      "groupBy": ["region"],
+      "aggs": [{ "col": "revenue", "fn": "avg" }],
+      "orderBy": { "col": "avg_revenue", "dir": "desc" },
+      "chart": { "type": "bar", "x": "region", "y": "avg_revenue" }
+    },
+    "expect": {
+      "outputRows": 2,
+      "rowsInclude": [
+        { "region": "East", "avg_revenue": 25 },
+        { "region": "West", "avg_revenue": 24 }
+      ]
+    }
+  },
+  {
+    "id": "total-units-by-region",
+    "file": "sales.csv",
+    "spec": {
+      "groupBy": ["region"],
+      "aggs": [{ "col": "units", "fn": "sum" }]
+    },
+    "expect": {
+      "rowsInclude": [
+        { "region": "East", "sum_units": 700 },
+        { "region": "West", "sum_units": 670 }
+      ]
+    }
+  },
+  {
+    "id": "filtered-max",
+    "file": "sales.csv",
+    "spec": {
+      "filters": [{ "col": "quarter", "op": "eq", "value": "Q4" }],
+      "groupBy": ["region"],
+      "aggs": [{ "col": "revenue", "fn": "max" }]
+    },
+    "expect": {
+      "rowCount": 2,
+      "outputRows": 2,
+      "rowsInclude": [
+        { "region": "East", "max_revenue": 41 },
+        { "region": "West", "max_revenue": 33 }
+      ]
+    }
+  }
+]

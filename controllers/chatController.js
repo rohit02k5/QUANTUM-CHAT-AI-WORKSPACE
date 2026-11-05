@@ -63,6 +63,7 @@ async function prepareMessageContext(userId, chat, message, { useDocuments, docu
                 sources = chunks.map((c, i) => ({
                     fileId: c.fileId,
                     originalName: c.originalName,
+                    type: c.type,
                     page: c.metadata?.page,
                     startSec: c.metadata?.startSec,
                     score: c.score,

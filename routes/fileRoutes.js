@@ -1,7 +1,8 @@
 const express = require("express");
 const multer = require("multer");
-const { uploadFile, getUserFiles, searchFiles, deleteFile, viewFile, streamIngestion } = require("../controllers/fileController");
+const { uploadFile, getUserFiles, searchFiles, deleteFile, viewFile, streamIngestion, reprocessFile, getFileInfo, deepAnalysis, deepAnalysisQuota, askData } = require("../controllers/fileController");
 const { requireSignIn } = require("../middlewares/authMiddleware");
+const { aiLimiter } = require("../middlewares/rateLimits");
 
 const router = express.Router();
 router.use(requireSignIn);
@@ -50,11 +51,28 @@ const ALLOWED_MIMETYPES = new Set([
     "audio/m4a",
     "audio/x-m4a",
     "audio/aac",
+    // images (validated again by magic bytes in the controller)
+    "image/png",
+    "image/jpg",
+    "image/jpeg",
+    "image/webp",
 ]);
 
 // Sized for the audio cap (25MB); document-specific limits enforced in controller
+const audio = require("../utils/audio");
+const image = require("../utils/image");
 const AUDIO_FEATURE = process.env.FEATURE_AUDIO !== "false";
-const MAX_UPLOAD_BYTES = AUDIO_FEATURE ? 26 * 1024 * 1024 : 10 * 1024 * 1024;
+const DOC_MAX_BYTES = 10 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = AUDIO_FEATURE ? 26 * 1024 * 1024 : DOC_MAX_BYTES;
+
+// Reject oversized uploads by TYPE as early as possible — Content-Length is
+// declared before the body streams to disk, so we can refuse before staging.
+// Slightly conservative (multipart overhead counts against the cap).
+const perTypeCap = (mimetype) =>
+    mimetype.startsWith("audio/") ? audio.AUDIO_MAX_BYTES()
+        : mimetype.startsWith("image/") ? image.IMAGE_MAX_BYTES()
+        : DOC_MAX_BYTES;
+const tooBig = (msg) => Object.assign(new Error(msg), { code: "LIMIT_FILE_SIZE" });
 
 const upload = multer({
     storage: storage,
@@ -63,8 +81,20 @@ const upload = multer({
         if (!AUDIO_FEATURE && file.mimetype.startsWith("audio/")) {
             return cb(new Error("Audio uploads are disabled"));
         }
-        if (ALLOWED_MIMETYPES.has(file.mimetype)) return cb(null, true);
-        cb(new Error(`Unsupported file type: ${file.mimetype}`));
+        if (!image.MULTIMODAL_FEATURE() && file.mimetype.startsWith("image/")) {
+            return cb(new Error("Image uploads are disabled"));
+        }
+        if (!ALLOWED_MIMETYPES.has(file.mimetype)) {
+            return cb(new Error(`Unsupported file type: ${file.mimetype}`));
+        }
+        const declared = parseInt(req.headers["content-length"] || "0", 10);
+        const cap = perTypeCap(file.mimetype);
+        if (declared > cap) {
+            const kind = file.mimetype.startsWith("audio/") ? "Audio files"
+                : file.mimetype.startsWith("image/") ? "Images" : "Documents";
+            return cb(tooBig(`${kind} are limited to ${Math.round(cap / 1024 / 1024)}MB`));
+        }
+        cb(null, true);
     },
 });
 
@@ -72,7 +102,7 @@ const upload = multer({
 const uploadSingle = (req, res, next) => {
     upload.single("file")(req, res, (err) => {
         if (err) {
-            const status = err.name === "MulterError" && err.code === "LIMIT_FILE_SIZE" ? 413 : 400;
+            const status = err.code === "LIMIT_FILE_SIZE" ? 413 : 400;
             return res.status(status).json({ message: err.message || "Upload rejected" });
         }
         next();
@@ -83,7 +113,12 @@ router.post("/upload", uploadSingle, uploadFile);
 router.get("/list", getUserFiles);
 router.get("/search", searchFiles);
 router.get("/:fileId/view", viewFile);
+router.get("/:fileId/info", getFileInfo);
 router.get("/:fileId/ingestion/stream", streamIngestion);
+router.post("/:fileId/reprocess", reprocessFile);
+router.post("/:fileId/deep-analysis", aiLimiter, deepAnalysis);
+router.get("/:fileId/deep-analysis/quota", deepAnalysisQuota);
+router.post("/:fileId/ask-data", aiLimiter, askData);
 router.delete("/:fileId", deleteFile);
 
 module.exports = router;

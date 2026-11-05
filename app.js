@@ -3,7 +3,7 @@ const dotenv = require("dotenv");
 dotenv.config();
 const cors = require("cors");
 const bodyParser = require("body-parser");
-const rateLimit = require("express-rate-limit");
+const { authLimiter, aiLimiter } = require("./middlewares/rateLimits");
 const helmet = require("helmet");
 const cookieParser = require("cookie-parser");
 
@@ -53,24 +53,8 @@ if (process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "test") {
   app.use(require("morgan")("dev"));
 }
 
-// Rate limiting
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 50,
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: () => process.env.NODE_ENV === "test",
-  message: { message: "Too many attempts, please try again later" },
-});
-const aiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: parseInt(process.env.AI_RATE_MAX || "100", 10),
-  standardHeaders: true,
-  legacyHeaders: false,
-  // Disabled in tests unless TEST_RATE_LIMIT=1 (see tests/ratelimit.test.js)
-  skip: () => process.env.NODE_ENV === "test" && process.env.TEST_RATE_LIMIT !== "1",
-  message: { message: "AI rate limit exceeded, please slow down" },
-});
+// Rate limiting — shared limiters live in middlewares/rateLimits.js so
+// routers can apply aiLimiter to individual endpoints too.
 
 // Root Route for checking status
 app.get("/", (req, res) => {
@@ -97,6 +81,7 @@ app.get("/api/v1/features", require("./middlewares/authMiddleware").requireSignI
   res.json({
     agent: process.env.FEATURE_AGENT !== "false",
     audio: process.env.FEATURE_AUDIO !== "false",
+    multimodal: process.env.FEATURE_MULTIMODAL !== "false",
   });
 });
 

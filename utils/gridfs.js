@@ -4,6 +4,7 @@
  * connection's native driver — no extra dependency.
  */
 const mongoose = require("mongoose");
+const fs = require("fs");
 const { Readable } = require("stream");
 
 let _bucket = null;
@@ -25,6 +26,21 @@ function saveBuffer(buffer, { filename = "file", contentType = "application/octe
         up.on("finish", () => resolve(up.id));
         Readable.from(buffer).pipe(up);
     });
+}
+
+/** Pipe a Readable into GridFS — never buffers the whole file in RAM. */
+function saveStream(readable, { filename = "file", contentType = "application/octet-stream", metadata = {} } = {}) {
+    return new Promise((resolve, reject) => {
+        const up = bucket().openUploadStream(filename, { contentType, metadata });
+        up.on("error", reject);
+        up.on("finish", () => resolve(up.id));
+        readable.on("error", reject).pipe(up);
+    });
+}
+
+/** Stream a local path into GridFS. */
+function savePath(filePath, opts) {
+    return saveStream(fs.createReadStream(filePath), opts);
 }
 
 function openDownloadStream(id, opts) {
@@ -56,4 +72,4 @@ async function remove(id) {
     }
 }
 
-module.exports = { saveBuffer, openDownloadStream, stat, getBuffer, remove };
+module.exports = { saveBuffer, saveStream, savePath, openDownloadStream, stat, getBuffer, remove };

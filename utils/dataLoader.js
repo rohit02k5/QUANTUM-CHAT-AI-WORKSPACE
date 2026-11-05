@@ -1,4 +1,5 @@
 const fs = require("fs");
+const path = require("path");
 const { PDFParse } = require("pdf-parse");
 const mammoth = require("mammoth");
 
@@ -45,33 +46,56 @@ class DataLoader {
 
     static async _loadPdf(filePath, metadata) {
         const buf = fs.readFileSync(filePath);
-        const parser = new PDFParse(new Uint8Array(buf));
-        const info = await parser.load();
+        // standardFontDataUrl lets pdfjs decode PDFs that rely on the 14
+        // standard fonts without embedding them (common in generated docs).
+        const fontsDir = path.join(path.dirname(require.resolve("pdfjs-dist/package.json")), "standard_fonts").replace(/\\/g, "/") + "/";
+        const parser = new PDFParse({
+            data: new Uint8Array(buf),
+            ...(fs.existsSync(fontsDir) ? { standardFontDataUrl: fontsDir } : {}),
+        });
+        let totalPages, result;
+        try {
+            const info = await parser.load();
+            totalPages = info.numPages;
+
+            // One extraction pass — result.pages[] is 1-indexed per the
+            // pdf-parse v2 API. ({ pageIndex } does not exist;
+            // partial:[n] selects pages.)
+            result = await parser.getText();
+        } finally {
+            await parser.destroy().catch(() => {});
+        }
+        const pageTexts = Array.isArray(result?.pages) ? result.pages : [];
 
         const documents = [];
-        const totalPages = info.numPages;
+        const minChars = parseInt(process.env.PDF_MIN_PAGE_CHARS || "30", 10);
+        const pagesWithoutText = [];
 
         for (let i = 0; i < totalPages; i++) {
             try {
-                const page = await parser.getText({ pageIndex: i });
-                const text = (page && page.text ? page.text : "").trim();
-                if (text) {
-                    documents.push({
-                        pageContent: text,
-                        metadata: {
-                            ...metadata,
-                            page: i + 1, // 1-based, matches PDF footprint
-                            totalPages,
-                        },
-                    });
+                const text = (pageTexts[i]?.text || "").trim();
+                if (text.length < minChars) {
+                    // Scanned/image-only page — recorded so the UI can offer
+                    // Deep analysis for it.
+                    pagesWithoutText.push(i + 1);
+                    if (!text) continue;
                 }
+                documents.push({
+                    pageContent: text,
+                    metadata: {
+                        ...metadata,
+                        page: i + 1, // 1-based, matches PDF footprint
+                        totalPages,
+                    },
+                });
             } catch (err) {
                 // Skip unreadable pages rather than failing the whole file
                 console.warn(`[DataLoader] Skipping PDF page ${i + 1}: ${err.message}`);
+                pagesWithoutText.push(i + 1);
             }
         }
 
-        return { documents };
+        return { documents, pagesWithoutText, totalPages };
     }
 
     static async _loadDocx(filePath, metadata) {

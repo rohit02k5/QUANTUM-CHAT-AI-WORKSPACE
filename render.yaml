@@ -1,0 +1,131 @@
+# Render Blueprint — Quantum AI Workspace
+# https://render.com/docs/blueprint-spec
+#
+# Two services:
+#   quantum-api     — Express backend (Node 24), health check /health
+#   quantum-client  — CRA static site with SPA rewrite
+#
+# ALL secrets use `sync: false` — set their real values in the Render
+# dashboard (Environment → Add Environment Variable). Nothing sensitive
+# lives in this file. See docs/DEPLOY.md for the full checklist.
+
+services:
+  - type: web
+    name: quantum-api
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: node server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      # --- secrets (set in dashboard; sync: false stores no value) ---
+      - key: MONGO_URI            # mongodb+srv://... Atlas connection string (db quantum_ai)
+        sync: false
+      - key: GEMINI_API_KEY       # Google AI Studio key
+        sync: false
+      - key: JWT_ACCESS_SECRET    # strong random secret
+        sync: false
+      - key: JWT_REFRESH_SECRET   # strong random secret (different from access)
+        sync: false
+      - key: SMTP_EMAIL           # gmail address for transactional mail
+        sync: false
+      - key: SMTP_PASSWORD        # gmail app password
+        sync: false
+      - key: GOOGLE_CLIENT_ID     # OAuth — callback must point at this service (see DEPLOY.md)
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      # --- non-secret config ---
+      - key: CLIENT_URL           # must equal the static site URL below (CORS)
+        value: https://quantum-client.onrender.com
+      - key: SMTP_FROM_NAME
+        value: Quantum AI
+      - key: JWT_ACCESS_EXPIREIN
+        value: 24h
+      - key: JWT_REFRESH_EXPIREIN
+        value: 15d
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: GEMINI_EMBEDDING_MODEL
+        value: gemini-embedding-2
+      - key: EMBEDDING_DIMS
+        value: "768"
+      - key: ATLAS_VECTOR_SEARCH_INDEX
+        value: chunks_embedding_index
+      - key: RAG_TOP_K
+        value: "3"
+      - key: RAG_MIN_SCORE
+        value: "0.5"
+      - key: AI_RATE_MAX
+        value: "100"
+      - key: LOG_LEVEL
+        value: info
+      # --- feature flags (defaults true; set "false" to disable) ---
+      - key: FEATURE_AGENT
+        value: "true"
+      - key: FEATURE_AUDIO
+        value: "true"
+      - key: FEATURE_MULTIMODAL
+        value: "true"   # image ingestion + PDF deep analysis
+      # --- multimodal caps (defaults shown; optional) ---
+      - key: IMAGE_MAX_MB
+        value: "8"
+      - key: MULTIMODAL_MAX_PAGES
+        value: "20"
+      - key: DEEP_ANALYSIS_DAILY_CAP
+        value: "3"
+      - key: PDF_MIN_PAGE_CHARS
+        value: "30"          # below this a page is flagged "scanned"
+      - key: TABLE_MAX_ROWS
+        value: "50000"
+      - key: TABLE_QUERY_TIMEOUT_MS
+        value: "10000"
+      # --- ingestion / job tuning (defaults shown; optional) ---
+      - key: INGEST_CONCURRENCY
+        value: "1"
+      - key: INGEST_POLL_MS
+        value: "3000"
+      - key: INGEST_STALE_MS
+        value: "120000"
+      - key: INGEST_MAX_ATTEMPTS
+        value: "3"
+      - key: INGEST_EMBED_BATCH
+        value: "8"
+      - key: USER_STORAGE_MAX_MB
+        value: "100"      # M0 budget: keep total per-user storage bounded
+      - key: AUDIO_MAX_MB
+        value: "25"
+      - key: AUDIO_MAX_MIN
+        value: "30"
+      - key: AGENT_MAX_STEPS
+        value: "5"
+      - key: AGENT_TIMEOUT_MS
+        value: "45000"
+      - key: WEB_SEARCH_DAILY_CAP
+        value: "20"
+
+  - type: static
+    name: quantum-client
+    buildCommand: cd client && npm ci && npm run build
+    staticPublishPath: client/build
+    pullRequestPreviewsEnabled: false
+    routes:
+      # SPA fallback — every path serves index.html
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: REACT_APP_API_URL   # must equal the API service URL (no trailing slash)
+        value: https://quantum-api.onrender.com
+      - key: CI                  # CRA: treat warnings as warnings, not errors
+        value: "false"

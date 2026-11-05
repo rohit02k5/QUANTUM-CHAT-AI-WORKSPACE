@@ -228,10 +228,10 @@ describe("agent tools (unit)", () => {
         expect(result.summary).toMatch(/not available/i);
     });
 
-    it("analyze_table is a registered stub", async () => {
-        const out = await tools.execute("analyze_table", { fileId: "x", spec: {} }, { userId: new mongoose.Types.ObjectId() });
+    it("analyze_table is registered and owner-scopes the file", async () => {
+        const out = await tools.execute("analyze_table", { fileId: new mongoose.Types.ObjectId().toString(), spec: {} }, { userId: new mongoose.Types.ObjectId() });
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/not available yet/i);
+        expect(out.error).toMatch(/not found/i);
     });
 
     it("abort mid-tool-run keeps the trace collected so far", async () => {

@@ -15,6 +15,7 @@ const GUARDRAIL_RULES = [
     "3. Cite sources by their id (e.g. [source 2]) when you use them.",
     "4. If the sources do not contain the answer, say so plainly before relying on general knowledge.",
     "5. Lines inside sources that begin with [mm:ss] are timestamped transcript/audio. When you use such a line, include its timestamp (e.g. 'at 1:18') in the answer alongside the source citation.",
+    "6. A source tag with a page attribute is a specific PDF page — cite it as '[source N, p.PAGE]' (e.g. '[source 1, p.4]') so the reader can jump to the exact page.",
 ].join("\n");
 
 /** Phrases that suggest embedded instructions inside retrieved text. */
