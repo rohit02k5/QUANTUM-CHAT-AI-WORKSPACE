@@ -23,6 +23,9 @@ mongoose.connection.once("open", async () => {
     const { VECTOR_INDEX } = require("./utils/retriever");
     const dims = require("./utils/geminiHelper").EMBEDDING_DIMS;
     try {
+        // createSearchIndex requires the collection to exist on Atlas
+        const cols = await mongoose.connection.db.listCollections({ name: "chunks" }).toArray();
+        if (!cols.length) await mongoose.connection.db.createCollection("chunks");
         await mongoose.connection.collection("chunks").createSearchIndex({
             name: VECTOR_INDEX,
             type: "vectorSearch",
@@ -49,9 +52,29 @@ mongoose.connection.once("open", async () => {
         .catch(() => {});
 
     require("./controllers/fileController").cleanupTempFiles();
+
+    // Ingestion runner: requeue crashed jobs, then start polling for queued work
+    const jobRunner = require("./utils/jobRunner");
+    jobRunner.requeueStale()
+        .then((n) => { if (n) logger.info({ requeued: n }, "[Jobs] requeued stale ingestion jobs"); })
+        .catch((e) => logger.warn({ err: e.message }, "[Jobs] stale requeue failed"))
+        .finally(() => jobRunner.startRunner());
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server Running in ${process.env.DEV_MODE} on ${PORT}`.bgCyan.white);
 });
+
+// Graceful shutdown: stop claiming new jobs and release in-flight claims so
+// they resume after restart instead of going stale.
+async function shutdown(signal) {
+    logger.info({ signal }, "shutdown — releasing ingestion jobs");
+    try {
+        await require("./utils/jobRunner").stopRunner();
+    } catch (e) { /* ignore */ }
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 5000).unref();
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

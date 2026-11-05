@@ -368,6 +368,71 @@ node scripts/reembed.js             # batched, resumable, idempotent
 ```
 
 ---
+
+## Ingestion pipeline — resumable jobs, GridFS, audio
+
+Uploads are stored in **GridFS** (bucket `uploads`) — never on the app's
+ephemeral disk — then ingested by an in-process job runner as an
+`IngestionJob`. `POST /api/v1/files/upload` returns `202 {fileId, jobId}`;
+`INGEST_SYNC=true` keeps the old synchronous `201` contract for tests and
+small files.
+
+```mermaid
+stateDiagram-v2
+    [*] --> queued: upload → GridFS + job
+    queued --> processing: findOneAndUpdate (atomic claim, lockedAt)
+    processing --> extract: documents
+    processing --> transcribe: audio (windowed, resumable)
+    extract --> chunk
+    transcribe --> chunk
+    chunk --> embed: batched (backoff on 429/5xx)
+    embed --> index: upsert (file, seq) — idempotent
+    index --> done: file.status=ready
+    processing --> queued: crash/stale lock → requeue (attempts++)
+    processing --> failed: attempts ≥ INGEST_MAX_ATTEMPTS
+    failed --> queued: POST /api/v1/jobs/:id/retry
+    done --> [*]
+```
+
+- **Progress**: `GET /api/v1/files/:id/ingestion/stream` (SSE, owner-only,
+  heartbeats) or `GET /api/v1/jobs/:id` polling; failed jobs can be retried
+  via `POST /api/v1/jobs/:id/retry`. The Knowledge Base shows live progress
+  bars and a Retry action.
+- **Resumable**: chunk writes are idempotent upserts keyed `(file, seq)`;
+  transcript windows persist per-job so a restart never redoes them. Stale
+  `processing` locks are requeued at boot (`INGEST_STALE_MS`); SIGTERM
+  releases in-flight claims back to `queued`.
+- **Readiness**: files carry `status: processing|ready|failed` — only
+  `ready` files are retrievable by RAG and agent tools (`list_documents`
+  still shows them with their status).
+- **Storage safety**: per-user cap `USER_STORAGE_MAX_MB` (100MB default);
+  deleting a file removes its GridFS blob, chunks and jobs; legacy disk
+  files migrate via `node scripts/migrate-to-gridfs.js [--dry-run]`.
+- **Privacy**: files stream through `GET /api/v1/files/:fileId/view`
+  (ownership-checked, HTTP **Range** support — no public URLs).
+
+### Audio → transcript → meeting minutes
+
+- **Formats**: mp3 / m4a / wav / ogg / flac, validated by **magic bytes**;
+  caps `AUDIO_MAX_MB` (25) and `AUDIO_MAX_MIN` (30), duration read
+  server-side via `music-metadata`.
+- **Transcription**: `GEMINI_TRANSCRIBE_MODEL` (verified via `listModels`
+  at boot, falls back to the chat model). Small files go inline; larger
+  ones use the **Gemini Files API**, always deleted in `finally`. Long
+  audio is transcribed in `AUDIO_SEGMENT_SEC` windows — each window is a
+  resumable checkpoint on the job.
+- Transcripts are grouped into ~1000-char chunks carrying
+  `metadata.startSec/endSec/speakers`, pass through the same
+  `guard.js` injection screening as any source, and produce **mm:ss
+  citation chips** that seek the authenticated player.
+- **Meeting Minutes** (Executive Assistant):
+  `POST /api/v1/openai/meeting-minutes` returns structured
+  `{summary, decisions[], actionItems[{owner,task,due?,sourceSec?}],
+  openQuestions[], risks[]}` — every item carries a seekable timestamp
+  chip; client-side Markdown export included.
+- `FEATURE_AUDIO=false` disables the pipeline and hides the UI.
+
+---
 ## Local Setup
 ```text
 git clone https://github.com/rohit02k5/QUANTUM-CHAT-AI-WORKSPACE.git

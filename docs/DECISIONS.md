@@ -190,3 +190,79 @@ One short entry per phase: what was built, why, tradeoffs, and free-tier implica
 - Flashcard persistence uses a new `FlashcardSet` model — the pre-existing
   endpoint only produced ephemeral cards; spec deferred real storage to
   Phase 5.
+
+## Phase 3A — GridFS storage, resumable ingestion jobs, audio pipeline
+
+- **Storage audit result:** uploaded bytes lived on the app's local disk
+  (`uploads/` via multer `diskStorage`; `File.path`; `fs.createReadStream`
+  in `/view`). Render's disk is ephemeral — all uploads now go to **GridFS**
+  (bucket `uploads`) on the mongoose connection's native driver. Multer
+  still stages to disk momentarily, then `persistToGridFS` moves the bytes
+  and deletes the temp file. `File.gridfsId` is the canonical pointer;
+  `path` remains for legacy records (`scripts/migrate-to-gridfs.js`:
+  idempotent, `--dry-run`, resumable via gridfsId presence, local files
+  only deleted after byte-length verification).
+- **Range requests** on `/api/v1/files/:fileId/view` (206 + Content-Range +
+  Accept-Ranges) — required for `<audio>` seeking. Still authenticated and
+  ownership-scoped; no public media URLs anywhere.
+- **Job model** (`models/IngestionJob`): `{user, file, status, stage,
+  progress, attempts, error, lockedAt, state}` with `{status,updatedAt}`
+  and `{user,createdAt}` indexes. `state` is the resume checkpoint:
+  `state.nextSeq` (embed watermark) and `state.audio.doneWindows` +
+  accumulated `segments` (transcribe).
+- **Runner** (`utils/jobRunner.js`): poll loop (`INGEST_POLL_MS`,
+  `INGEST_CONCURRENCY` claim slots) claiming via `findOneAndUpdate
+  queued→processing + lockedAt + attempts++` — two runners can never take
+  the same job. Batched embeds (`INGEST_EMBED_BATCH`) with exponential
+  backoff on 429/5xx. Boot requeues stale locks > `INGEST_STALE_MS`;
+  ≥ `INGEST_MAX_ATTEMPTS` → `failed` with a user-readable error. SIGTERM/
+  SIGINT stop claiming and release in-flight jobs back to `queued`.
+- **Upload contract**: `202 {fileId, jobId, file}` for queued ingestion;
+  `INGEST_SYNC=true` keeps the synchronous `201 {file, indexed, chunkCount}`
+  shape. Temp attachments unchanged (sync extract + 201). Per-user storage
+  cap `USER_STORAGE_MAX_MB` (100) enforced before storing (413).
+- **Readiness gating**: `File.status` (`processing|ready|failed`) —
+  retriever scopes to ready files only (legacy docs without `status` count
+  as ready), agent tools (`get_document_overview`, `create_flashcards`)
+  refuse non-ready files, `list_documents` shows the real status.
+- **Audio**: magic-byte sniffing (`utils/audio.js`) — extension/MIME never
+  trusted; `music-metadata` reads duration server-side (ESM loaded via
+  dynamic `import()`); caps `AUDIO_MAX_MB`/`AUDIO_MAX_MIN`. Transcription
+  model `GEMINI_TRANSCRIBE_MODEL` is verified against `listModels` at boot
+  and falls back to the primary model with a warning. Inline parts ≤
+  `AUDIO_INLINE_MAX_MB`; larger files go through the Gemini Files API and
+  are **always deleted in `finally`**. Structured output via
+  `responseSchema` → `[{startSec,endSec,speaker,text}]` grouped into
+  ~1000-char chunks with `metadata.startSec/endSec/speakers`. Transcript
+  text flows through the same `guard.js` pipeline as any chunk — `<source>`
+  tags carry a `start="Ns"` attribute so the model can cite timestamps.
+- **Playback & citations**: authenticated `<audio>` player fed by
+  fetch-to-blob (`AudioPlayerModal`); chat source chips show `mm:ss` and
+  seek the player. Executive Assistant gains a **Meeting** template
+  (`POST /api/v1/openai/meeting-minutes`) — structured JSON normalized
+  server-side, `sourceSec` chips seek the player, client-side Markdown
+  export.
+- **Eval scorer (3.0)**: injection-safe now distinguishes *quoting/
+  flagging* injected text from *complying* — regex pre-filter for bare
+  payload compliance + a sharpened `followsInjection` judge definition.
+  New `timestampCitationAccuracy` metric + `meeting_audio.transcript.json`
+  fixture (mocked-transcript form — real audio bytes can't be validated
+  deterministically in CI). `EVAL_MONGO_DB` overrides the db name on a
+  shared cluster; eval data is cleaned at end-of-run (skip with `--keep`).
+- **Eval DB hygiene**: eval runs against Atlas use `quantum_ai_eval` and
+  delete the eval user, files, chunks and jobs afterwards.
+
+### Deviations from spec
+- **Windowed long-audio transcription is prompt-based.** Without ffmpeg,
+  audio can't be sliced server-side; windows (`AUDIO_SEGMENT_SEC`) ask the
+  model for that time range with absolute timestamps. Each window is a
+  resumable checkpoint, satisfying the resume requirement; token cost per
+  window covers the whole file (documented, acceptable on free tier).
+- `File.path` kept as optional legacy field rather than dropped.
+- `list_documents` no longer does a chunk-count aggregate — `File.status`
+  is authoritative (cheaper and correct under async ingestion).
+- `<source>` tags gained a `start="Ns"` attribute for transcript chunks so
+  the model can cite timestamps — additive to the Phase 1 wire format.
+- `music-metadata` v12 added (its dependency `file-type` is only
+  vulnerability-free at v12+); loaded via dynamic `import()` since the
+  codebase is CommonJS.

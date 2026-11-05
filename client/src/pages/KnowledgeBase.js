@@ -1,12 +1,26 @@
-import React, { useState, useEffect } from "react";
-import { Box, Typography, TextField, InputAdornment, Grid, Paper, Chip, useTheme, Card, CardContent, IconButton } from "@mui/material";
+import React, { useState, useEffect, useRef } from "react";
+import { Box, Typography, TextField, InputAdornment, Grid, Paper, Chip, useTheme, Card, CardContent, IconButton, LinearProgress, Tooltip } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import DescriptionIcon from "@mui/icons-material/Description";
 import ImageIcon from "@mui/icons-material/Image";
 import DeleteIcon from "@mui/icons-material/Delete";
+import AudiotrackIcon from "@mui/icons-material/Audiotrack";
+import ReplayIcon from "@mui/icons-material/Replay";
 import axios from "../axiosConfig";
 import toast from "react-hot-toast";
 import { motion } from "framer-motion";
+import AudioPlayerModal from "../components/AudioPlayerModal";
+
+const baseURL = axios.baseURL;
+
+const STAGE_LABELS = {
+    extract: "Extracting text",
+    transcribe: "Transcribing audio",
+    chunk: "Chunking",
+    embed: "Embedding",
+    index: "Indexing",
+    describe: "Finishing",
+};
 
 const KnowledgeBase = () => {
     const theme = useTheme();
@@ -14,38 +28,107 @@ const KnowledgeBase = () => {
     const [results, setResults] = useState([]);
     const [mediaItems, setMediaItems] = useState([]);
     const [stats, setStats] = useState({ chats: 0, files: 0 });
+    const [player, setPlayer] = useState({ open: false, fileId: null, fileName: "", seekSec: null });
+    const sseFailed = useRef(false);
+    const sseAbort = useRef(new Map());
+
+    const fetchData = async () => {
+        try {
+            const [chatsRes, filesRes] = await Promise.all([
+                axios.get("/api/v1/chat/history"),
+                axios.get("/api/v1/files/list")
+            ]);
+
+            const chats = chatsRes.data.chats || [];
+            const files = filesRes.data.files || [];
+
+            setStats({ chats: chats.length, files: files.length });
+            setMediaItems(files.map((f) => ({
+                id: f._id,
+                type: f.kind === "audio" || (f.mimetype || "").startsWith("audio/") ? "audio" : "doc",
+                name: f.originalName,
+                originalName: f.originalName,
+                filename: f.filename,
+                status: f.status || "ready",
+                job: f.job || null,
+                durationSec: f.durationSec,
+                date: new Date(f.uploadDate).toLocaleDateString()
+            })));
+        } catch (error) {
+            console.error("Failed to load knowledge base data", error);
+        }
+    };
 
     useEffect(() => {
-        console.log("KnowledgeBase Mounted"); // Debug Log
-        const fetchData = async () => {
-            try {
-                const [chatsRes, filesRes] = await Promise.all([
-                    axios.get("/api/v1/chat/history"),
-                    axios.get("/api/v1/files/list")
-                ]);
-
-                const chats = chatsRes.data.chats || [];
-                const files = filesRes.data.files || [];
-
-                setStats({ chats: chats.length, files: files.length });
-
-                // Map files to media items format
-                const recentFiles = files.slice(0, 6).map(f => ({
-                    id: f._id,
-                    type: f.mimetype.includes("image") ? "image" : "doc",
-                    name: f.originalName,
-                    originalName: f.originalName,
-                    filename: f.filename,
-                    date: new Date(f.uploadDate).toLocaleDateString()
-                }));
-                setMediaItems(recentFiles);
-
-            } catch (error) {
-                console.error("Failed to load knowledge base data", error);
-            }
-        };
         fetchData();
+        const aborted = sseAbort.current;
+        return () => { for (const c of aborted.values()) c.abort(); };
     }, []);
+
+    const updateJob = (fileId, evt) => {
+        setMediaItems((prev) => prev.map((it) =>
+            it.id === fileId
+                ? {
+                    ...it,
+                    status: evt.status === "done" ? "ready" : evt.status === "failed" ? "failed" : "processing",
+                    job: { ...(it.job || {}), status: evt.status, stage: evt.stage, progress: evt.progress, error: evt.error },
+                }
+                : it
+        ));
+        if (evt.status === "done" || evt.status === "failed") fetchData();
+    };
+
+    // Open one SSE stream per processing file (polling fallback when SSE fails)
+    useEffect(() => {
+        if (sseFailed.current) return;
+        for (const item of mediaItems) {
+            if (item.status !== "processing" || sseAbort.current.has(item.id)) continue;
+            const ctrl = new AbortController();
+            sseAbort.current.set(item.id, ctrl);
+            (async () => {
+                try {
+                    const token = localStorage.getItem("authToken");
+                    const res = await fetch(`${baseURL}/api/v1/files/${item.id}/ingestion/stream`, {
+                        headers: { Authorization: `Bearer ${token}` },
+                        signal: ctrl.signal,
+                    });
+                    if (!res.ok || !res.body) throw new Error("sse unavailable");
+                    const reader = res.body.getReader();
+                    const dec = new TextDecoder();
+                    let buf = "";
+                    for (;;) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        buf += dec.decode(value, { stream: true });
+                        const events = buf.split("\n\n");
+                        buf = events.pop();
+                        for (const ev of events) {
+                            const line = ev.split("\n").find((l) => l.startsWith("data:"));
+                            if (!line) continue;
+                            try { updateJob(item.id, JSON.parse(line.slice(5))); } catch { /* ignore */ }
+                        }
+                    }
+                } catch (e) {
+                    if (!ctrl.signal.aborted) {
+                        sseFailed.current = true;
+                        fetchData(); // drop to polling
+                    }
+                } finally {
+                    sseAbort.current.delete(item.id);
+                }
+            })();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mediaItems]);
+
+    // Polling fallback while anything is still processing (or SSE unavailable)
+    const anyProcessing = mediaItems.some((it) => it.status === "processing");
+    useEffect(() => {
+        if (!anyProcessing && !sseFailed.current) return undefined;
+        const t = setInterval(fetchData, 4000);
+        return () => clearInterval(t);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [anyProcessing, sseFailed.current]);
 
     const handleDeleteFile = async (id, e) => {
         e.stopPropagation();
@@ -59,8 +142,24 @@ const KnowledgeBase = () => {
         }
     };
 
-    // Files live behind auth — fetch as blob and open an object URL
+    const handleRetry = async (item, e) => {
+        e.stopPropagation();
+        try {
+            const jobId = item.job?.id;
+            if (jobId) await axios.post(`/api/v1/jobs/${jobId}/retry`);
+            toast.success("Retry queued");
+            fetchData();
+        } catch (err) {
+            toast.error(err.response?.data?.message || "Retry failed");
+        }
+    };
+
+    // Files live behind auth — audio opens the player, docs open as blob
     const handleViewFile = async (item) => {
+        if (item.type === "audio") {
+            setPlayer({ open: true, fileId: item.id, fileName: item.originalName, seekSec: null });
+            return;
+        }
         try {
             const { data } = await axios.get(`/api/v1/files/${item.id}/view`, { responseType: "blob" });
             const url = URL.createObjectURL(data);
@@ -75,9 +174,7 @@ const KnowledgeBase = () => {
         setSearchTerm(e.target.value);
         if (e.target.value.length > 2) {
             try {
-                // Use global search endpoint
                 const { data } = await axios.get(`/api/v1/search?query=${e.target.value}`);
-                // Combine results for display (Files + Chats)
                 const mixedResults = [
                     ...(data.files || []).map(f => ({ ...f, type: 'file' })),
                     ...(data.chats || []).map(c => ({ ...c, type: 'chat' }))
@@ -89,6 +186,12 @@ const KnowledgeBase = () => {
         } else {
             setResults([]);
         }
+    };
+
+    const fileIcon = (item) => {
+        if (item.type === "audio") return <AudiotrackIcon sx={{ fontSize: 60, opacity: 0.5 }} />;
+        if (item.type === "image") return <ImageIcon sx={{ fontSize: 60, opacity: 0.5 }} />;
+        return <DescriptionIcon sx={{ fontSize: 60, opacity: 0.5 }} />;
     };
 
     return (
@@ -166,23 +269,59 @@ const KnowledgeBase = () => {
                                 sx={{ borderRadius: "16px", overflow: "hidden", cursor: "pointer" }}
                                 onClick={() => handleViewFile(item)}
                             >
-                                <Box sx={{ height: 140, bgcolor: theme.palette.neutral?.light || "#e5e5e5", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                    {item.type === "image" ? <ImageIcon sx={{ fontSize: 60, opacity: 0.5 }} /> : <DescriptionIcon sx={{ fontSize: 60, opacity: 0.5 }} />}
+                                <Box sx={{ height: 140, bgcolor: theme.palette.neutral?.light || "#e5e5e5", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+                                    {fileIcon(item)}
+                                    {item.type === "audio" && item.durationSec != null && (
+                                        <Chip size="small" label={`${Math.floor(item.durationSec / 60)}:${String(Math.floor(item.durationSec % 60)).padStart(2, "0")}`} sx={{ position: "absolute", bottom: 8, right: 8 }} />
+                                    )}
                                 </Box>
-                                <CardContent sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                                    <Box sx={{ minWidth: 0 }}>
-                                        <Typography variant="h6" noWrap>{item.originalName}</Typography>
-                                        <Typography variant="caption" color="text.secondary">{item.date}</Typography>
+                                <CardContent>
+                                    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                        <Box sx={{ minWidth: 0 }}>
+                                            <Typography variant="h6" noWrap>{item.originalName}</Typography>
+                                            <Typography variant="caption" color="text.secondary">{item.date}</Typography>
+                                        </Box>
+                                        <Box>
+                                            {item.status === "failed" && (
+                                                <Tooltip title={item.job?.error || "Ingestion failed — retry"}>
+                                                    <IconButton size="small" color="error" onClick={(e) => handleRetry(item, e)}>
+                                                        <ReplayIcon fontSize="small" />
+                                                    </IconButton>
+                                                </Tooltip>
+                                            )}
+                                            <IconButton size="small" onClick={(e) => handleDeleteFile(item.id, e)}>
+                                                <DeleteIcon fontSize="small" />
+                                            </IconButton>
+                                        </Box>
                                     </Box>
-                                    <IconButton size="small" onClick={(e) => handleDeleteFile(item.id, e)}>
-                                        <DeleteIcon fontSize="small" />
-                                    </IconButton>
+                                    {item.status === "processing" && (
+                                        <Box sx={{ mt: 1 }}>
+                                            <LinearProgress
+                                                variant={item.job?.progress != null ? "determinate" : "indeterminate"}
+                                                value={item.job?.progress || 0}
+                                            />
+                                            <Typography variant="caption" color="text.secondary">
+                                                {STAGE_LABELS[item.job?.stage] || "Queued"}{item.job?.progress != null ? ` • ${item.job.progress}%` : ""}
+                                            </Typography>
+                                        </Box>
+                                    )}
+                                    {item.status === "failed" && (
+                                        <Chip size="small" color="error" label="Ingestion failed" sx={{ mt: 1 }} />
+                                    )}
                                 </CardContent>
                             </Card>
                         </motion.div>
                     </Grid>
                 ))}
             </Grid>
+
+            <AudioPlayerModal
+                open={player.open}
+                onClose={() => setPlayer((p) => ({ ...p, open: false }))}
+                fileId={player.fileId}
+                fileName={player.fileName}
+                seekSec={player.seekSec}
+            />
         </Box>
     );
 };

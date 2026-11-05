@@ -22,6 +22,8 @@ import Modal from "@mui/material/Modal";
 import DownloadIcon from "@mui/icons-material/Download";
 import ZoomInIcon from "@mui/icons-material/ZoomIn";
 import CloseIcon from "@mui/icons-material/Close";
+import AudiotrackIcon from "@mui/icons-material/Audiotrack";
+import AudioPlayerModal, { formatTimestamp } from "../components/AudioPlayerModal";
 
 const Mermaid = ({ chart }) => {
     const ref = useRef(null);
@@ -151,7 +153,7 @@ const TraceTimeline = ({ trace }) => {
     );
 };
 
-const MessageBubble = ({ role, content, sources, truncated, trace }) => {
+const MessageBubble = ({ role, content, sources, truncated, trace, onSeekAudio }) => {
     const theme = useTheme();
     const isUser = role === "user";
 
@@ -250,12 +252,14 @@ const MessageBubble = ({ role, content, sources, truncated, trace }) => {
                                 <Chip
                                     key={idx}
                                     size="small"
-                                    label={`${s.originalName}${s.page ? ` p.${s.page}` : ""} • ${((s.score || 0) * 100).toFixed(1)}%`}
+                                    clickable={s.startSec != null}
+                                    onClick={s.startSec != null ? () => onSeekAudio?.(s.fileId, s.startSec) : undefined}
+                                    label={`${s.originalName}${s.startSec != null ? ` ${formatTimestamp(s.startSec)}` : s.page ? ` p.${s.page}` : ""} • ${((s.score || 0) * 100).toFixed(1)}%`}
                                     variant="outlined"
                                     color={s.flagged ? "warning" : "default"}
-                                    icon={s.flagged ? <ReportProblemIcon sx={{ fontSize: 14 }} /> : undefined}
+                                    icon={s.flagged ? <ReportProblemIcon sx={{ fontSize: 14 }} /> : s.startSec != null ? <AudiotrackIcon sx={{ fontSize: 14 }} /> : undefined}
                                     sx={{ mr: 0.5, mb: 0.5 }}
-                                    title={s.flagged ? "This source contains instruction-like text (treated as data only)" : (s.snippet || s.originalName)}
+                                    title={s.flagged ? "This source contains instruction-like text (treated as data only)" : s.startSec != null ? `Play from ${formatTimestamp(s.startSec)}` : (s.snippet || s.originalName)}
                                 />
                             )
                         )}
@@ -300,6 +304,7 @@ const Chat = () => {
     const [tagFilter, setTagFilter] = useState(null);
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState("");
+    const [audioSeek, setAudioSeek] = useState(null); // {fileId, sec} for the audio player
     const fileInputRef = useRef(null);
     const bottomRef = useRef(null);
 
@@ -320,7 +325,7 @@ const Chat = () => {
     const loadDocs = async () => {
         try {
             const { data } = await axios.get("/api/v1/files/list");
-            setDocuments((data.files || []).filter((f) => !f.isTemp));
+            setDocuments((data.files || []).filter((f) => !f.isTemp && (!f.status || f.status === "ready")));
         } catch (error) {
             console.error("Failed to load documents", error);
         }
@@ -434,9 +439,15 @@ const Chat = () => {
             const { data } = await axios.post("/api/v1/files/upload", formData, {
                 headers: { "Authorization": `Bearer ${token}` }
             });
-            setSelectedFile({ id: data.file._id, name: data.file.originalName, temp: !data.indexed });
-            toast.success(data.indexed ? "File saved to knowledge base!" : "File attached (this message only)", { id: toastId });
-            if (data.indexed) loadDocs();
+            if (data.jobId && !data.indexed && !data.file?.isTemp) {
+                // Async ingestion (202): watch the job, don't attach yet
+                toast.success("Uploaded — indexing in background", { id: toastId });
+                pollIngestion(data.jobId);
+            } else {
+                setSelectedFile({ id: data.file._id, name: data.file.originalName, temp: !data.indexed });
+                toast.success(data.indexed ? "File saved to knowledge base!" : "File attached (this message only)", { id: toastId });
+                if (data.indexed) loadDocs();
+            }
         } catch (error) {
             console.error(error);
             toast.error("Upload failed", { id: toastId });
@@ -447,6 +458,25 @@ const Chat = () => {
     };
 
     const clearFile = () => setSelectedFile(null);
+
+    // Poll an ingestion job until it finishes, then refresh the doc list
+    const pollIngestion = async (jobId) => {
+        for (let i = 0; i < 150; i++) {
+            try {
+                const { data } = await axios.get(`/api/v1/jobs/${jobId}`);
+                if (data.job?.status === "done") {
+                    toast.success("File indexed and ready");
+                    loadDocs();
+                    return;
+                }
+                if (data.job?.status === "failed") {
+                    toast.error(`Indexing failed: ${data.job.error || "unknown error"}`);
+                    return;
+                }
+            } catch { /* keep polling */ }
+            await new Promise((r) => setTimeout(r, 2000));
+        }
+    };
 
     // Fallback: the original non-streaming endpoint (used when the stream
     // fails before delivering any events).
@@ -757,7 +787,7 @@ const Chat = () => {
                             </Box>
                         )}
                         {messages.map((msg, index) => (
-                            <MessageBubble key={index} role={msg.role} content={msg.content} sources={msg.sources} truncated={msg.truncated} trace={msg.trace} />
+                            <MessageBubble key={index} role={msg.role} content={msg.content} sources={msg.sources} truncated={msg.truncated} trace={msg.trace} onSeekAudio={(fileId, sec) => setAudioSeek({ fileId, sec })} />
                         ))}
                         {loading && (
                             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -905,6 +935,14 @@ const Chat = () => {
                     )}
                 </Paper>
             </Box>
+
+            <AudioPlayerModal
+                open={!!audioSeek}
+                onClose={() => setAudioSeek(null)}
+                fileId={audioSeek?.fileId}
+                fileName={audioSeek ? "Audio source" : ""}
+                seekSec={audioSeek?.sec}
+            />
         </Box>
     );
 };

@@ -116,6 +116,7 @@ async function runAgent({ userId, chatId, message, history, personaPrompt, brows
                         fileId: c.fileId,
                         originalName: c.file,
                         page: c.page,
+                        startSec: c.startSec,
                         score: c.score,
                         snippet: (c.text || "").slice(0, 200),
                         flagged: c.flagged || outcome.flagged || undefined,

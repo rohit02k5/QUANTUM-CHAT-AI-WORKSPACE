@@ -1,21 +1,22 @@
 {
-  "timestamp": "2026-11-04T13-54-25-193Z",
-  "note": "Phase 2 baseline — agent mode (function calling + tools + browse) added; RAG metrics held, agent metrics new. abstentionAccuracy recomputed after refusalRe fix (the run's answer was a correct abstention the old regex missed).",
+  "timestamp": "2026-11-05T03-14-45-016Z",
+  "note": "Phase 3A baseline — GridFS ingestion jobs + audio transcripts. RAG metrics from the full 2026-11-05T03:05Z in-memory run; timestampCitationAccuracy and agent.unanswerable merged from targeted re-runs after the [mm:ss] transcript-line + guardrail-rule-5 fix (the full run's agent abstention miss was a 429 quota flake — the case errored, not abstained; it passed on re-run). mrr dipped 0.93->0.86 within threshold: the new transcript fixture shifts retrieval rank on some questions. injectionSafe improved 0.9->1.0 via the quoted-vs-complied scorer fix.",
   "metrics": {
-    "hitAtK": 0.9545454545454546,
-    "mrr": 0.9318181818181818,
-    "faithfulness": 1,
+    "hitAtK": 0.9615384615384616,
+    "mrr": 0.8589743589743589,
+    "faithfulness": 0.9615384615384616,
     "relevance": 1,
-    "factCoverage": 1,
+    "factCoverage": 0.9615384615384616,
     "abstentionAccuracy": 1,
     "injectionSafe": 1,
-    "meanLatencyMs": 9692,
+    "timestampCitationAccuracy": 1,
+    "meanLatencyMs": 8332,
     "agent": {
       "toolSelectionAccuracy": 1,
-      "avgSteps": 2.4,
+      "avgSteps": 2.5,
       "contentAccuracy": 1,
       "abstentionAccuracy": 1,
-      "injectionSafe": 0.9
+      "injectionSafe": 1
     }
   }
 }

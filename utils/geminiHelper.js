@@ -54,6 +54,9 @@ class GeminiHelper {
             process.env.GEMINI_FALLBACK_MODELS || "gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.6-flash"
         ).split(",");
         this.embeddingModel = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2";
+        // Audio transcription model — verified at boot; falls back to modelName
+        this.transcribeModelName = process.env.GEMINI_TRANSCRIBE_MODEL || this.modelName;
+        this.transcribeModelFallback = false;
         this._mock = process.env.GEMINI_MOCK === "1" ? require("./geminiMock") : null;
     }
 
@@ -277,9 +280,10 @@ class GeminiHelper {
      * @returns {Promise<{chat: string[], embedding: string, missing: string[]}>}
      */
     async verifyConfiguredModels() {
+        const requested = process.env.GEMINI_TRANSCRIBE_MODEL;
         const configured = [this.modelName, ...this.fallbackModels, this.embeddingModel];
-        const unique = [...new Set(configured)];
-        const result = { chat: [this.modelName, ...this.fallbackModels], embedding: this.embeddingModel, missing: [] };
+        const unique = [...new Set(configured, requested).values()].filter(Boolean);
+        const result = { chat: [this.modelName, ...this.fallbackModels], embedding: this.embeddingModel, transcribe: this.transcribeModelName, missing: [] };
         if (this._mock) return result;
         try {
             const pager = await this.ai.models.list({ config: { pageSize: 200 } });
@@ -288,11 +292,117 @@ class GeminiHelper {
             if (result.missing.length) {
                 logger.warn({ missing: result.missing }, "[GeminiHelper] configured models not available on this key");
             }
+            // Transcribe model missing → fall back to the primary chat model
+            if (requested && !available.has(requested)) {
+                this.transcribeModelName = this.modelName;
+                this.transcribeModelFallback = true;
+                result.transcribe = this.transcribeModelName;
+                logger.warn({ requested, fallback: this.modelName }, "[GeminiHelper] GEMINI_TRANSCRIBE_MODEL unavailable — using primary chat model for audio");
+            }
         } catch (err) {
             result.missing = unique; // couldn't verify — report all unknown
             result.listError = err.message;
         }
         return result;
+    }
+
+    // ------------------------------------------------------------------
+    // Audio / media (Phase 3A)
+    // ------------------------------------------------------------------
+
+    /**
+     * Upload media to the Gemini Files API (large audio). Caller MUST pass
+     * the returned name to deleteMedia() in a finally block.
+     */
+    async uploadMedia(buffer, mime, displayName = "quantum-audio") {
+        if (this._mock) return this._mock.__uploadMedia(buffer, mime, displayName);
+        const blob = new Blob([buffer], { type: mime });
+        const file = await this.ai.files.upload({ file: blob, config: { mimeType: mime, displayName } });
+        return { name: file.name, uri: file.uri, mimeType: file.mimeType || mime };
+    }
+
+    async deleteMedia(name) {
+        if (!name) return;
+        if (this._mock) { this._mock.__deleteMedia(name); return; }
+        try {
+            await this.ai.files.delete({ name });
+        } catch (e) {
+            logger.warn({ name, err: e.message }, "[GeminiHelper] media delete failed");
+        }
+    }
+
+    /**
+     * Transcribe audio → [{startSec,endSec,speaker,text}].
+     * Small buffers go inline; larger ones use the Files API, always deleted
+     * in finally. `window` {startSec,endSec} transcribes only that range for
+     * long-audio segmentation (timestamps stay absolute).
+     */
+    async transcribeAudio(buffer, { mime, window, signal = null } = {}) {
+        const windowClause = window
+            ? ` Transcribe ONLY the speech between ${window.startSec} seconds and ${window.endSec} seconds. Timestamps must be absolute (relative to the start of the audio).`
+            : "";
+        const prompt = `Transcribe this audio. Return a JSON array of segments, each {"startSec": number, "endSec": number, "speaker": string, "text": string}. Use labels like "Speaker 1"/"Speaker 2" when voices are distinguishable, "" otherwise. Segment on natural pauses. Output JSON only.${windowClause}`;
+        const schema = {
+            type: "ARRAY",
+            items: {
+                type: "OBJECT",
+                properties: {
+                    startSec: { type: "NUMBER" },
+                    endSec: { type: "NUMBER" },
+                    speaker: { type: "STRING" },
+                    text: { type: "STRING" },
+                },
+                required: ["startSec", "endSec", "text"],
+            },
+        };
+
+        const inlineMax = parseFloat(process.env.AUDIO_INLINE_MAX_MB || "10") * 1024 * 1024;
+        let uploadedName = null;
+        let mediaPart;
+        try {
+            if (buffer.length <= inlineMax) {
+                mediaPart = { inlineData: { mimeType: mime, data: buffer.toString("base64") } };
+            } else {
+                const up = await this.uploadMedia(buffer, mime);
+                uploadedName = up.name;
+                mediaPart = { fileData: { fileUri: up.uri, mimeType: up.mimeType } };
+            }
+            const contents = [{ role: "user", parts: [mediaPart, { text: prompt }] }];
+            const config = { responseMimeType: "application/json", responseSchema: schema };
+
+            let result;
+            if (this._mock) {
+                const start = Date.now();
+                result = await this._mock.generate(contents, config);
+                recordUsage({ kind: "transcribe", model: this.transcribeModelName, latencyMs: Date.now() - start, ok: true, usageMetadata: result.usageMetadata });
+            } else if (this.transcribeModelName !== this.modelName) {
+                // Dedicated transcribe model first, normal chain as fallback
+                const start = Date.now();
+                try {
+                    result = await this.ai.models.generateContent({
+                        model: this.transcribeModelName,
+                        contents,
+                        config: { ...config, abortSignal: signal || undefined },
+                    });
+                    recordUsage({ kind: "transcribe", model: this.transcribeModelName, latencyMs: Date.now() - start, ok: true, usageMetadata: result.usageMetadata });
+                } catch (e) {
+                    recordUsage({ kind: "transcribe", model: this.transcribeModelName, latencyMs: Date.now() - start, ok: false, errorCode: e.status || e.message });
+                    logger.warn({ model: this.transcribeModelName, err: e.message }, "[GeminiHelper] transcribe model failed — falling back");
+                    result = await this.generateContentWithRetry(contents, config, 2, "transcribe", signal);
+                }
+            } else {
+                result = await this.generateContentWithRetry(contents, config, 2, "transcribe", signal);
+            }
+
+            const raw = this.getText(result);
+            let segments = [];
+            try { segments = JSON.parse(raw); }
+            catch { segments = JSON.parse((raw.match(/\[[\s\S]*\]/) || ["[]"])[0]); }
+            if (!Array.isArray(segments)) segments = [];
+            return { segments, usage: this.getUsageMetadata(result), model: this.transcribeModelName };
+        } finally {
+            if (uploadedName) await this.deleteMedia(uploadedName);
+        }
     }
 }
 

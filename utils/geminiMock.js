@@ -66,8 +66,59 @@ function __setAgentScript(script) {
 const isGoogleSearchCall = (config) =>
     Array.isArray(config?.tools) && config.tools.some((t) => t.googleSearch);
 
+// --- audio / media tracking (tests assert upload+delete lifecycle) ---
+let mediaFiles = [];
+let transcriptScript = null; // (window|null) => segments[]
+function __uploadMedia(buffer, mime) {
+    const f = { name: `files/mock-${mediaFiles.length + 1}`, uri: `files/mock-${mediaFiles.length + 1}`, mimeType: mime, size: buffer.length, deleted: false };
+    mediaFiles.push(f);
+    return Promise.resolve(f);
+}
+function __deleteMedia(name) {
+    const f = mediaFiles.find((x) => x.name === name);
+    if (f) f.deleted = true;
+}
+function __mediaFiles() { return mediaFiles; }
+function __resetMedia() { mediaFiles = []; transcriptScript = null; }
+function __setTranscript(fn) { transcriptScript = fn; }
+
+/** Find media parts + prompt text inside a contents array. */
+function mediaParts(prompt) {
+    const contents = Array.isArray(prompt) ? prompt : [];
+    const parts = contents.flatMap((c) => c?.parts || []);
+    const media = parts.filter((p) => p.inlineData || p.fileData);
+    const texts = parts.filter((p) => typeof p.text === "string").map((p) => p.text);
+    return { media, texts };
+}
+
+const defaultSegments = (w) => {
+    const segs = [
+        { startSec: 0, endSec: 5.5, speaker: "Speaker 1", text: "Mock transcript: hello and welcome to the Quantum project sync." },
+        { startSec: 5.5, endSec: 12, speaker: "Speaker 2", text: "We reviewed the roadmap and assigned the ingestion work." },
+        { startSec: 12, endSec: 20, speaker: "Speaker 1", text: "Decision: ship Phase 3A with GridFS storage and audio." },
+        { startSec: 20, endSec: 30, speaker: "Speaker 2", text: "Action item: verify the Atlas cluster before Friday." },
+    ];
+    if (!w) return segs;
+    return segs
+        .filter((s) => s.endSec > w.startSec && s.startSec < w.endSec)
+        .map((s) => ({ ...s, startSec: Math.max(s.startSec, w.startSec), endSec: Math.min(s.endSec, w.endSec) }));
+};
+
 function generate(prompt, config = {}) {
     const text = typeof prompt === "string" ? prompt : JSON.stringify(prompt);
+
+    // Audio transcription call — contents carry an audio part
+    const { media, texts } = mediaParts(prompt);
+    if (media.length) {
+        const promptText = texts.join("\n");
+        const wm = promptText.match(/between (\d+(?:\.\d+)?) seconds and (\d+(?:\.\d+)?) seconds/i);
+        const window = wm ? { startSec: parseFloat(wm[1]), endSec: parseFloat(wm[2]) } : null;
+        const segs = transcriptScript ? transcriptScript(window) : defaultSegments(window);
+        return Promise.resolve({
+            text: JSON.stringify(segs),
+            usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 20 },
+        });
+    }
 
     // Web-search grounding call (separate request, googleSearch tool only)
     if (isGoogleSearchCall(config)) {
@@ -108,8 +159,16 @@ function generate(prompt, config = {}) {
 
     let response = "mock response";
 
-    // Eval judge style calls expect JSON back
-    if (config.responseMimeType === "application/json" || config.responseSchema) {
+    // Meeting minutes calls get a schema-shaped structured answer
+    if (/meeting minutes/i.test(text)) {
+        response = JSON.stringify({
+            summary: "Mock meeting summary of the transcript.",
+            decisions: [{ text: "Ship Phase 3A", sourceSec: 12 }],
+            actionItems: [{ owner: "Speaker 2", task: "Verify Atlas cluster", due: "Friday", sourceSec: 20 }],
+            openQuestions: [{ text: "Who owns the eval?", sourceSec: 25 }],
+            risks: [{ text: "Free-tier rate limits", sourceSec: 28 }],
+        });
+    } else if (config.responseMimeType === "application/json" || config.responseSchema) {
         response = JSON.stringify({
             supported: true,
             supportedClaims: 1,
@@ -135,4 +194,14 @@ async function* generateStream(prompt, config) {
     }
 }
 
-module.exports = { embed, generate, generateStream, __setAgentScript };
+module.exports = {
+    embed,
+    generate,
+    generateStream,
+    __setAgentScript,
+    __uploadMedia,
+    __deleteMedia,
+    __mediaFiles,
+    __resetMedia,
+    __setTranscript,
+};
