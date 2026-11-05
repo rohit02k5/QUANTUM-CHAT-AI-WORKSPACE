@@ -147,6 +147,38 @@ exports.forgotPasswordController = async (req, res, next) => {
     }
 };
 
+// Delete the authenticated user's account and every artifact they own:
+// file docs + GridFS blobs, chunks, ingestion jobs, chats, personas,
+// flashcard sets, usage events, web-search quota docs. Owner-scoped by
+// requireSignIn; irreversible.
+exports.deleteAccountController = async (req, res, next) => {
+    try {
+        const mongoose = require("mongoose");
+        const gridfs = require("../utils/gridfs");
+        const File = require("../models/File");
+        const uid = req.user._id;
+        const col = (n) => mongoose.connection.collection(n);
+
+        const files = await File.find({ user: uid }).select("_id gridfsId").lean();
+        await Promise.all(files.map((f) => (f.gridfsId ? gridfs.remove(f.gridfsId).catch(() => {}) : null)));
+        await Promise.all([
+            col("files").deleteMany({ user: uid }),
+            col("chunks").deleteMany({ user: uid }),
+            col("ingestionjobs").deleteMany({ user: uid }),
+            col("chats").deleteMany({ user: uid }),
+            col("personas").deleteMany({ user: uid }),
+            col("flashcardsets").deleteMany({ user: uid }),
+            col("usageevents").deleteMany({ user: uid }),
+            col("websearchquotas").deleteMany({ user: uid }),
+        ]);
+        await userModel.deleteOne({ _id: uid });
+        res.clearCookie("refreshToken");
+        res.status(200).json({ success: true, message: "Account and all associated data deleted" });
+    } catch (err) {
+        next(err);
+    }
+};
+
 // Reset Password
 exports.resetPasswordController = async (req, res, next) => {
     const resetPasswordToken = crypto

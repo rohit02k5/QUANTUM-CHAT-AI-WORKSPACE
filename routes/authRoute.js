@@ -10,6 +10,13 @@ router.post('/logout', logoutController)
 // --- Token Refresh ---
 router.post("/refresh", require("../controllers/authController").refreshController);
 
+// --- Account deletion (authenticated, deletes the user + all their data) ---
+router.delete(
+    "/account",
+    require("../middlewares/authMiddleware").requireSignIn,
+    require("../controllers/authController").deleteAccountController
+);
+
 // --- Google OAuth ---
 router.get("/google", passport.authenticate("google", { scope: ["profile", "email"] }));
 
