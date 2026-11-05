@@ -1,25 +1,40 @@
-# Quantum — Unified AI Intelligence Suite
+# Quantum — an AI second brain that cites its sources and shows its work
 
-> **Where Artificial Intelligence, Knowledge, and Creativity Converge.**  
-> *A production-grade AI workspace built with MERN, GenAI, and advanced data visualization.*
+![CI](https://github.com/rohit02k5/QUANTUM-CHAT-AI-WORKSPACE/actions/workflows/ci.yml/badge.svg)
+![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+![Node](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)
+
+> Upload documents, meetings and data. Ask questions, run agents, study — every answer is grounded in your files, labelled with the provider/model that wrote it, and measured by a committed eval suite.
+
+**DEMO_URL:** `https://quantum-chat-frontend.onrender.com` — click **"Try the demo"** on the login page (enabled when the deployment sets `DEMO_MODE=true`). The demo account is pre-seeded and restricted; recorded replays work even with zero AI quota.
 
 ---
 
-## Overview
+## Why it's interesting
 
-**Quantum** is a **full-scale AI Intelligence Suite**, not just a chatbot.
+- **Trust, not vibes** — every answer carries inline citations (file, page, audio timestamp), a provider+model label, and a visible tool trace in agent mode. Quality is *measured* by `scripts/eval.js` against committed baselines — see [Quality](#quality--measured-not-claimed).
+- **Built for free-tier reality** — a multi-provider LLM router (`utils/llm/`) with per-model circuit breakers, per-task chains, capability gating, a dev disk cache, and an extractive degraded mode that keeps the product useful when every provider is out of quota.
+- **Security as a feature** — an enumerated route-authorization test fails CI on any unclassified route; a cross-user ownership matrix covers every resource; injection defenses are layered and eval-tested ([docs/SECURITY.md](docs/SECURITY.md)).
 
-It is designed as a **single unified workspace** where users can:
+---
 
-- Converse intelligently with AI  
-- **Chat with their own documents** via a full **RAG (Retrieval-Augmented Generation)** pipeline  
-- Analyze documents and content deeply  
-- Visualize knowledge and insights in **2D & 3D**  
-- Generate executive summaries and strategies  
-- Create AI-generated images using diffusion models  
-- Securely manage data with **enterprise-grade authentication**
+## Quality — measured, not claimed
 
-This project demonstrates **real-world system design, AI orchestration, security engineering, and polished UX** — exactly what recruiters look for beyond basic demos.
+All numbers below come from committed report files; each states the provider/model that produced it. Full tables and methodology live in `evals/` + `scripts/eval.js`.
+
+| Metric | Score | Source (provider/model, date) |
+|---|---|---|
+| Faithfulness | 98.4% | `evals/baseline.json` (gemini/gemini-2.5-flash, 2026-11-05) |
+| Fact coverage | 96.8% | same |
+| Abstention accuracy | 100% | same |
+| Injection-safe answers | 100% | same |
+| Page / timestamp citation accuracy | 100% / 100% | same |
+| Image QA / table-query accuracy | 100% / 100% | same |
+| Retrieval MRR (40-query stress set) | 0.873 | `evals/retrieval-baseline.json` (vector mode) |
+| Retrieval MRR (15-query identifier-hard set) | 0.867 | `evals/retrieval-hard-results.json` (gemini-embedding-2, 2026-11-05) |
+| Agent: tool-selection / content accuracy | 100% / 100%, avg 2.64 steps | `evals/baseline.json` |
+
+**Design-by-measurement:** hybrid retrieval is OFF because it measured *identical* to vector-only on the stress set — and on a purpose-built identifier-adversarial set (`evals/retrieval-hard-results.json`, zero rank diffs). Query rewriting is ON because it measured +0.045 MRR on follow-ups. Defaults follow data, not fashion.
 
 ---
 
@@ -27,19 +42,6 @@ This project demonstrates **real-world system design, AI orchestration, security
 
 🔗 **Quantum AI:**  
  https://quantum-chat-frontend.onrender.com/login
-
----
-
-## Why Quantum Stands Out
-
-- End-to-end **MERN Stack** architecture  
-- Full **RAG pipeline** — embeddings, vector search, and grounded chat over your own files  
-- Multiple **AI systems orchestrated together**  
-- Secure **OAuth + JWT hybrid authentication**  
-- Advanced **3D knowledge graphs & analytics**  
-- Integrated **AI Image Generation (NeuraPix)**  
-- Product-level **UI/UX & workflow design**  
-- **Production-ready deployment** mindset  
 
 ---
 
@@ -645,10 +647,62 @@ curl -X POST https://your-host/api/v1/public/chat \
   untouched for every other route.
 
 ---
+## Multi-provider resilience (Phase 6)
+
+All AI calls route through `utils/llm/` — the only layer allowed to touch a provider SDK or URL:
+
+```mermaid
+flowchart LR
+    C[chat / agent / studio] --> R[LLM router<br/>utils/llm]
+    R --> CH[per-task chains<br/>LLM_CHAIN_* env]
+    CH --> P1[Gemini<br/>@google/genai]
+    CH --> P2[Groq<br/>OpenAI-compatible]
+    CH --> P3[OpenRouter<br/>OpenAI-compatible]
+    R --> CB[circuit breaker<br/>per provider:model]
+    R --> U[UsageEvent telemetry<br/>provider + model + cache]
+    R --> Q[per-user daily cap<br/>ADMIN exempt]
+```
+
+- **Chains** — `LLM_CHAIN_ANSWER|CHEAP|AGENT|VISION|TRANSCRIBE|JUDGE`, each `provider:model` entries tried in order; boot validation drops unknown models.
+- **Circuit breaker** — per `provider:model`: closed → open (daily quota → provider-reset or `LLM_DAILY_COOLDOWN_MS`) → half-open probe → closed. Auth failures get a long cooldown and surface in `/health`.
+- **Streaming** fails over only before the first token; after the first token it ends `truncated:true`, never silently switches mid-answer.
+- **Capability gating** — vision/PDF/transcription/tools/grounded-search only route to providers that declare them; otherwise a clean "unavailable with current providers" message.
+- **Privacy gate** — `LLM_ALLOWED_PROVIDERS` pins which providers may see user content.
+- **Degraded modes** — all providers down → extractive reply with citations (`degraded:true`); embeddings down → keyword-only retrieval (works without `RAG_HYBRID`); agent mode with no tool-capable provider → friendly refusal + document list.
+- **Dev/eval** — `LLM_CACHE=disk` caches deterministic calls (never production); `eval.js --provider=` runs per-provider baselines.
+- `utils/geminiHelper.js` is now a thin compatibility shim — all legacy callers and tests unchanged.
+
+### Demo mode (zero-quota portfolio demo)
+
+`DEMO_MODE=true` enables `POST /api/v1/auth/demo` ("Try the demo" on the login page) for a seeded, restricted demo account — no uploads, API keys, or account deletion; `DEMO_DAILY_AI_CAP` budget. `scripts/seed-demo.js` reseeds from `scripts/demo-seed.snapshot.json` (embeddings generated once, committed) with **zero AI calls**. `GET /api/v1/demo/replay/:id` streams three recorded scenarios through the same SSE path — always labelled *"Recorded replay, not a live model call"*.
+
+### Security hardening (Phase 6.2)
+
+- `tests/security-matrix.test.js` auto-enumerates every Express route and fails CI unless each is on an explicit public allow-list or returns 401 unauthenticated — plus a cross-user read/update/delete/stream matrix for every owned resource.
+- Dependabot (weekly, grouped) + `npm audit --omit=dev --audit-level=high` in CI.
+- Secrets scan of tree **and** git history: clean (fixtures/placeholders only). Threat model: [docs/SECURITY.md](docs/SECURITY.md).
+
 ## Local Setup
+
 ```text
 git clone https://github.com/rohit02k5/QUANTUM-CHAT-AI-WORKSPACE.git
 cd QUANTUM-CHAT-AI-WORKSPACE
+cp .env.example .env    # fill in: MONGO_URI, GEMINI_API_KEY, JWT_* secrets
+npm install
+npm run server          # http://localhost:8080
+cd client && npm install && npm start   # http://localhost:3000
+```
+
+**Every environment variable is documented inline in `.env.example`** (placeholders only — nothing hardcoded). Provider keys beyond Gemini are optional: set `GROQ_API_KEY`/`OPENROUTER_API_KEY`, verify model names via `node scripts/llm-smoke.js`, then add them to `LLM_CHAIN_*`.
+
+### Testing & eval
+
+```text
+npm test                              # full suite: Vitest + mongodb-memory-server, offline (GEMINI_MOCK=1)
+node scripts/eval.js --memory         # real RAG eval vs committed baseline (costs API calls)
+node scripts/eval-retrieval.js --memory --mode=vector   # retrieval ablation
+node scripts/llm-smoke.js             # one tiny call per configured provider
+node scripts/seed-demo.js             # reseed demo account (zero AI calls)
 ```
 
 Environment
@@ -699,6 +753,37 @@ Screenshots demonstrate authentication flows, AI chat, document intelligence, 3D
 <img width="1866" height="891" alt="Screenshot 2025-12-12 232954" src="https://github.com/user-attachments/assets/367ed399-d6cf-481e-a94a-ee9b3650106b" />
 <img width="1874" height="894" alt="Screenshot 2025-12-12 233108" src="https://github.com/user-attachments/assets/82246672-5c9e-4e7d-abd3-67cc5e95fd93" />
 <img width="1914" height="900" alt="Screenshot 2025-12-12 233308" src="https://github.com/user-attachments/assets/934328b2-8c45-4782-ba0e-eac66e388b70" />
+
+## Project structure
+
+```text
+app.js / server.js          Express app + bootstrap (indexes, boot validation, job runner, SIGTERM)
+controllers/  routes/       Feature endpoints; every route owner-scoped or public-allowlisted
+utils/llm/                  Multi-provider router: providers/, circuit, capabilities, telemetry, disk cache
+utils/geminiHelper.js       Thin compatibility shim over the router
+utils/retriever.js          Vector + keyword retrieval, identifier-rescue admission, degraded modes
+services/agent.js           Agent loop → tools/ registry (zod-validated, owner-scoped)
+evals/                      Golden sets + committed baselines (the numbers in this README)
+scripts/                    eval, retrieval ablation, re-embed, demo seed/replay, smoke tests
+tests/                      Vitest + Supertest + mongodb-memory-server (~200 tests)
+client/                     React 18 (CRA): pages, SSE client, landing page
+docs/                       SECURITY.md, DECISIONS.md, DEPLOY.md, DEMO_SCRIPT.md, INTERVIEW.md, PRODUCTION_CHECKLIST.md
+```
+
+## Honest limitations
+
+- **M0 shared Atlas tier** — 512MB, one vector index (currently 1/3 slots), `0.0.0.0/0` IP allow-list because Render egress IPs are dynamic.
+- **Free-tier provider quotas** are the binding constraint; degraded modes ride over them but can't create quota.
+- **Injection detector is heuristic** — measured 100% on our eval set, not a formal guarantee (defense in depth is the real control).
+- **In-process job runner + in-memory circuits** — correct at this scale; a worker queue and shared circuit state are the next step.
+- Full production hardening checklist: [docs/PRODUCTION_CHECKLIST.md](docs/PRODUCTION_CHECKLIST.md).
+
+## Roadmap
+
+- Live multi-provider chains (Groq/OpenRouter) — machinery shipped, awaiting keys
+- Worker-based ingestion queue + shared circuit state for horizontal scaling
+- Per-provider committed eval baselines once a second provider has quota
+- Dedicated Atlas tier + least-privilege DB user (see production checklist)
 
 Authors
 

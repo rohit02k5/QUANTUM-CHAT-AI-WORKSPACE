@@ -513,3 +513,56 @@ One short entry per phase: what was built, why, tradeoffs, and free-tier implica
   durable statements (most chats: zero); memory retrieval adds 0 calls
   (shared embedding). Quiz generation is 1 cheap call per quiz. Review,
   stats, export and key management cost zero AI calls.
+
+## Phase 6 — Multi-provider resilience, hardening, demo, polish
+
+- **Provider SDKs confined to `utils/llm/`.** `providers/gemini.js`
+  (@google/genai) + `providers/openaiCompat.js` (fetch-based, no new deps —
+  Groq/OpenRouter via baseURL). `utils/geminiHelper.js` is a thin shim over
+  `utils/llm/index.js` — all 32 legacy callers and every test unchanged.
+- **Per-task chains, capability-gated.** `LLM_CHAIN_*` env vars hold
+  `provider:model` lists; default chains derive from existing
+  `GEMINI_MODEL`/`GEMINI_FALLBACK_MODELS` so zero-config deployments behave
+  identically. Chains are filtered by `LLM_ALLOWED_PROVIDERS` (privacy),
+  circuit state, and required capability (stream/tools/embed/vision/pdf/
+  transcribe/groundedSearch).
+- **Circuits keyed `provider:model`.** Daily-quota opens until provider
+  reset hint or `LLM_DAILY_COOLDOWN_MS` (6h); rate-limit retries the same
+  entry once then advances; invalid-request/content-blocked surface
+  immediately without poisoning the provider or burning the chain. Agent
+  stays on one provider for a whole run.
+- **No failover after first token** — mid-stream failure ends with
+  `truncated:true`, never a provider switch mid-answer.
+- **Embeddings never fail over** (vector-space mixing is forbidden); the
+  retriever runs the keyword leg alone when the embed call fails
+  (degraded flag) and ingestion requeues via `notBefore`.
+- **Extractive fallback (6B):** all providers down + retrieved sources →
+  the reply IS the top passages, cited, `degraded:true` — stream and
+  non-stream, plus a friendly agent refusal with a document list. Agent
+  mid-run no-provider failure degrades the same way.
+- **SDK-response `text` is a prototype getter — spread drops it.** Both
+  the provider (`{...result}`) and router normalized with explicit
+  `text:`/`functionCalls:` copies; disk cache stores the normalized
+  snapshot. Found by the live smoke test (meta→done with zero tokens).
+- **`LLM_CACHE=disk`** (dev/eval only, refused in production):
+  sha256(provider+model+normalized request), temperature-0/cacheable
+  calls only, single-flight dedupe, hits don't count vs `EVAL_MAX_CALLS`.
+- **Security sweep (6.2):** `utils/routeEnumerator.js` walks the Express
+  5 `app.router` — 78 routes auto-classified; the test fails when a new
+  route is unclassified. Cross-user matrix for every owner-scoped
+  resource. Dependabot + `npm audit --omit=dev --audit-level=high` in CI.
+- **Graceful shutdown:** `utils/sseRegistry.js` tracks open responses;
+  SIGTERM sends `done{truncated}` to each, `stopRunner()` releases
+  claimed jobs back to `queued`, then DB disconnects. Tested in
+  `tests/shutdown.test.js`.
+- **Demo mode (6.4):** `DEMO_MODE=true` only — `POST /auth/demo` issues a
+  session for `User.isDemo` (uploads/keys/deletion/password restricted,
+  tighter daily cap). `scripts/gen-demo-seed.js` produced a committed
+  401KB snapshot (real embeddings, 24 chunks); `seed-demo.js` is
+  idempotent and costs zero AI. Recorded replays stream through the same
+  SSE reader with `replay:true` on every event — never presented as live.
+- **Landing bundle:** all authenticated pages are `React.lazy` — public
+  landing/login bundle is ~235KB gzipped; Plotly/pdfjs load on demand.
+- **Hybrid verdict stands:** adversarial identifier set
+  (`evals/retrieval-hard-results.json`) — vector MRR 0.8667 vs hybrid
+  0.8667, zero per-query diffs. `RAG_HYBRID=false` stays.

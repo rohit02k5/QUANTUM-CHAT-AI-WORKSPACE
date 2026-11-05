@@ -1,0 +1,12 @@
+Parts Catalog — Bracket Assembly ZXQ-88412-T
+
+SKU: ZXQ-88412-T. Titanium corner bracket for the Meridian enclosure line, 40mm
+profile. Weight 212 g. Tolerance class B. Supersedes part ZXQ-88410-T.
+
+Torque specification for ZXQ-88412-T: 18.5 N·m on M5 fasteners; use thread
+compound TC-9 on titanium-to-steel joints only.
+
+Compatibility: Meridian enclosures revision D and later. Not compatible with
+revision C rails — the mounting flange is 1.2 mm wider.
+
+Lead time: 11 business days. Packaged in lots of 24.

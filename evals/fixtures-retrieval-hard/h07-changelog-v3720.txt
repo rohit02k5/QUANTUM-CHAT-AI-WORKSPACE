@@ -1,0 +1,16 @@
+Release Notes — Build v3.7.20-rc.1
+
+This release candidate of the Meridian runtime focuses on lease-manager clock
+handling and ingestion stability.
+
+Changes in v3.7.20-rc.1:
+- Lease manager: clock-skew guard added (see incident ERR-8821-C).
+- Ingestion: assembler buffer lifecycle audited (see incident ERR-1093-F).
+- API: /v2/status gains a skew_estimate_ms field.
+
+Upgrade note for v3.7.20-rc.1: run the pre-upgrade script
+tools/precheck-3720.sh — it drains the telemetry queue and snapshots lease state
+before the rolling restart begins.
+
+Known issue: nodes upgraded directly from v3.7.18 must reboot twice; the first
+boot only stages the new scheduler image.

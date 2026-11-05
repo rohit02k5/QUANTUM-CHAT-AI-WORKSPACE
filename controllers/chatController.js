@@ -57,6 +57,7 @@ async function prepareMessageContext(userId, chat, message, { useDocuments, docu
     let usedMemories = [];
     let usedMemoryDetails = [];
     let queryVector = null;
+    let keywordOnly = false;
 
     const hasDocs = useDocuments !== false && (await Chunk.exists({ user: userId }));
     if (hasDocs) {
@@ -87,6 +88,7 @@ async function prepareMessageContext(userId, chat, message, { useDocuments, docu
             }
 
             const chunks = await retrieveChunks(userId, rw.query, RAG_TOP_K, scopedIds, { queryVector });
+            if (chunks.keywordOnly) keywordOnly = true;
             if (chunks.length > 0) {
                 const { context, flags } = guard.wrapSources(chunks);
                 prompt = guard.buildRagPrompt(message, context);
@@ -143,7 +145,7 @@ async function prepareMessageContext(userId, chat, message, { useDocuments, docu
 
     const personaPrompt = await resolvePersonaPrompt(chat);
     const systemInstruction = guard.buildSystemInstruction({ personaPrompt, memoryBlock });
-    return { prompt, sources, tempFileDoc, systemInstruction, rewrittenQuery, memoryBlock, usedMemories, usedMemoryDetails };
+    return { prompt, sources, tempFileDoc, systemInstruction, rewrittenQuery, memoryBlock, usedMemories, usedMemoryDetails, keywordOnly };
 }
 
 /**
@@ -207,6 +209,7 @@ exports.getUserChats = async (req, res) => {
 
 // Create/Update Chat (Message) — non-streaming path (unchanged response shape)
 exports.sendMessage = async (req, res) => {
+    let degradedChat = null, degradedSources = null, degradedMemories = null;
     try {
         if (!process.env.GEMINI_API_KEY && process.env.GEMINI_MOCK !== "1") {
             throw new Error("GEMINI_API_KEY is missing in environment variables");
@@ -240,8 +243,11 @@ exports.sendMessage = async (req, res) => {
         // Add user message to DB
         chat.messages.push({ role: "user", content: message });
 
-        const { prompt, sources, tempFileDoc, systemInstruction, rewrittenQuery, usedMemories, usedMemoryDetails } =
+        const { prompt, sources, tempFileDoc, systemInstruction, rewrittenQuery, usedMemories, usedMemoryDetails, keywordOnly } =
             await prepareMessageContext(userId, chat, message, { useDocuments, documentIds, fileId, memoryEnabled: req.user.memoryEnabled !== false });
+        degradedChat = chat;
+        degradedSources = sources;
+        degradedMemories = usedMemories;
 
         const history = buildHistory(chat);
         const result = await geminiHelper.generateChatWithRetry(history, prompt, 3, { systemInstruction });
@@ -253,6 +259,8 @@ exports.sendMessage = async (req, res) => {
             sources: sources.length ? sources : undefined,
             rewrittenQuery,
             usedMemories: usedMemories.length ? usedMemories : undefined,
+            provider: result.provider,
+            model: result.model,
         });
 
         await chat.save();
@@ -265,12 +273,37 @@ exports.sendMessage = async (req, res) => {
             rewrittenQuery,
             usedMemories: usedMemories.length ? usedMemories : undefined,
             usedMemoryDetails: usedMemoryDetails.length ? usedMemoryDetails : undefined,
+            provider: result.provider,
+            model: result.model,
+            keywordOnly: keywordOnly || undefined,
         });
 
         // Temp attachments are single-use: drop the record + disk file afterwards
         if (tempFileDoc) removeFileArtifacts(tempFileDoc);
     } catch (err) {
         const cls = require("../utils/geminiHelper").classifyError(err);
+        // Extractive fallback: every provider down/quota + retrieved sources
+        // → answer with the passages, flagged degraded. Never an empty 500.
+        if ((cls.kind === "daily-quota" || cls.kind === "no-providers") && degradedSources?.length) {
+            const reply = require("../utils/extractive").buildExtractiveReply(degradedSources);
+            if (reply && degradedChat) {
+                try {
+                    degradedChat.messages.push({
+                        role: "model", content: reply,
+                        sources: degradedSources,
+                        degraded: true,
+                        usedMemories: degradedMemories?.length ? degradedMemories : undefined,
+                    });
+                    await degradedChat.save();
+                } catch (e) { logger.warn({ err: e.message }, "[Chat] degraded persist failed"); }
+            }
+            if (reply) {
+                return res.status(200).json({
+                    response: reply, chatId: degradedChat?._id, chat: degradedChat,
+                    sources: degradedSources, degraded: true,
+                });
+            }
+        }
         if (cls.kind === "daily-quota") {
             return res.status(429).json({
                 message: "The daily AI quota has been reached — please try again later.",
@@ -300,6 +333,9 @@ exports.streamMessage = async (req, res) => {
     let aborted = false;
     let accumulated = "";
     let agentTrace = null;
+    let answerProvider = null;
+    let answerModel = null;
+    let degradedReply = false;
     const pendingToolCalls = new Map();
     let ping = null;
     const abort = new AbortController();
@@ -342,6 +378,9 @@ exports.streamMessage = async (req, res) => {
                 sources: sources.length ? sources : undefined,
                 trace: agentTrace?.length ? agentTrace : undefined,
                 truncated: !!truncated,
+                degraded: degradedReply || undefined,
+                provider: answerProvider,
+                model: answerModel,
                 rewrittenQuery,
                 usedMemories: usedMemories.length ? usedMemories : undefined,
             });
@@ -400,11 +439,12 @@ exports.streamMessage = async (req, res) => {
         // --- SSE begins ---
         res.writeHead(200, sseHeaders);
         res.flushHeaders();
+        require("../utils/sseRegistry").register(res);
         ping = setInterval(() => {
             if (!res.writableEnded) res.write(": ping\n\n");
         }, 15000);
 
-        sendEvent({ type: "meta", chatId: chat._id, requestId: getRequestId(), sources: sources.length ? sources : undefined, rewrittenQuery, usedMemories: usedMemories.length ? usedMemories : undefined, usedMemoryDetails: usedMemoryDetails.length ? usedMemoryDetails : undefined });
+        sendEvent({ type: "meta", chatId: chat._id, requestId: getRequestId(), sources: sources.length ? sources : undefined, rewrittenQuery, usedMemories: usedMemories.length ? usedMemories : undefined, usedMemoryDetails: usedMemoryDetails.length ? usedMemoryDetails : undefined, keywordOnly: ctx.keywordOnly || undefined });
 
         // Client disconnect mid-stream: res 'close' fires when the socket is
         // gone (more reliable than req 'close' for aborted responses).
@@ -422,17 +462,50 @@ exports.streamMessage = async (req, res) => {
         if (isAgent) {
             const { runAgent } = require("../services/agent");
             const personaPrompt = await resolvePersonaPrompt(chat);
-            const outcome = await runAgent({
-                userId,
-                chatId: chat._id,
-                message,
-                history,
-                personaPrompt,
-                memoryBlock: ctx.memoryBlock,
-                browse: !!browse,
-                emit: sendEvent,
-                signal: abort.signal,
-            });
+            // Degraded agent mode (Phase 6B): no tool-capable provider →
+            // friendly refusal + whatever cheap non-AI context exists.
+            const degradedAgentReply = async () => {
+                let docList = "";
+                try {
+                    const list = await require("../tools").execute("list_documents", {}, { userId, chatId: chat._id });
+                    const names = (list?.raw?.documents || []).slice(0, 20).map((d) => `- ${d.name || d.originalName || "document"}`);
+                    if (names.length) docList = `\n\nYour documents:\n${names.join("\n")}`;
+                } catch { /* listing is best-effort */ }
+                const msg = "AI is unavailable right now, so agent mode can't run tools or reason over your documents." + docList;
+                accumulated = msg;
+                degradedReply = true;
+                for (const piece of msg.match(/\S+\s*/g) || []) sendEvent({ type: "token", text: piece });
+                finished = true;
+                await persistAssistant(false);
+                sendEvent({ type: "done", chatId: chat._id, messageId: chat.messages[chat.messages.length - 1]?._id, truncated: false, degraded: true });
+                cleanup();
+                res.end();
+            };
+            if (!require("../utils/llm").generationAvailable("agent")) {
+                await degradedAgentReply();
+                return;
+            }
+            let outcome;
+            try {
+                outcome = await runAgent({
+                    userId,
+                    chatId: chat._id,
+                    message,
+                    history,
+                    personaPrompt,
+                    memoryBlock: ctx.memoryBlock,
+                    browse: !!browse,
+                    emit: sendEvent,
+                    signal: abort.signal,
+                });
+            } catch (agentErr) {
+                const acls = require("../utils/geminiHelper").classifyError(agentErr);
+                if (acls.kind === "no-providers" || acls.kind === "daily-quota") {
+                    await degradedAgentReply();
+                    return;
+                }
+                throw agentErr;
+            }
             sources = [...outcome.sources, ...outcome.webSources];
             accumulated = outcome.text || "";
             usage = outcome.usage;
@@ -464,6 +537,8 @@ exports.streamMessage = async (req, res) => {
 
         for await (const chunk of stream) {
             if (aborted) break;
+            if (chunk?.provider) answerProvider = chunk.provider;
+            if (chunk?.model) answerModel = chunk.model;
             const text = chunk?.text || "";
             if (chunk?.usageMetadata) usage = chunk.usageMetadata;
             if (text) {
@@ -484,6 +559,8 @@ exports.streamMessage = async (req, res) => {
             messageId: chat.messages[chat.messages.length - 1]?._id,
             truncated: false,
             usage: usage || undefined,
+            provider: answerProvider || undefined,
+            model: answerModel || undefined,
         });
         cleanup();
         res.end();
@@ -494,6 +571,30 @@ exports.streamMessage = async (req, res) => {
         const cls = require("../utils/geminiHelper").classifyError(err);
         logger.error({ err: err.message, errorCode: cls.code }, "[Chat][stream] error");
         if (aborted) return; // disconnect path already handled
+        // Extractive fallback (Phase 6B): every answer-chain provider down or
+        // daily-exhausted + retrieved sources → reply with the passages,
+        // labelled and flagged degraded — never an empty error screen.
+        if ((cls.kind === "daily-quota" || cls.kind === "no-providers") && sources.length && res.headersSent && !res.writableEnded) {
+            const reply = require("../utils/extractive").buildExtractiveReply(sources);
+            if (reply) {
+                accumulated = reply;
+                degradedReply = true;
+                for (const piece of reply.match(/\S+\s*/g) || []) {
+                    sendEvent({ type: "token", text: piece });
+                }
+                finished = true;
+                await persistAssistant(false);
+                sendEvent({
+                    type: "done",
+                    chatId: chat._id,
+                    messageId: chat.messages[chat.messages.length - 1]?._id,
+                    truncated: false,
+                    degraded: true,
+                });
+                res.end();
+                return;
+            }
+        }
         if (cls.kind === "daily-quota") {
             const payload = {
                 code: cls.code,

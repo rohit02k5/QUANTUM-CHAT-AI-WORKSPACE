@@ -32,6 +32,8 @@ const CASCADE = [
     { model: "ReviewLog" },
     { model: "QuizAttempt" },
     { model: "ApiKey" },
+    // Phase 6
+    { model: "EmbeddingCache" },
     // TTL-backed daily quota docs keyed `${userId}:${YYYY-MM-DD}` (no model)
     { collection: "deepanalysisquotas", query: (uid) => ({ _id: new RegExp(`^${uid}:`) }) },
     // Account-deletion confirmation tokens keyed by user _id (no model)

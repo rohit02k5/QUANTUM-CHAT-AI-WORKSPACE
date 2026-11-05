@@ -1,0 +1,15 @@
+Incident Report ERR-4417-A — Cache Coherency Subsystem
+
+Severity: high. Reported 2026-03-14. The cache coherency subsystem on node cluster
+west-2 began issuing stale reads under concurrent write load. Symptoms included
+intermittent 0.4% read skew during compaction windows and elevated retry counts
+on the replication bus.
+
+Root cause: a fencepost error in the write-barrier scheduler allowed a barrier
+release before the invalidation ack from the third replica arrived.
+
+Workaround for ERR-4417-A: pin the coherency scheduler to two cores and set
+WBARRIER_ACK_WAIT_MS=750 until patch 4.2.7 lands. Rollback marker: COH-ROLL-4417.
+
+Resolution: fixed in scheduler patch 4.2.7; regression test added under
+tests/coherency/stale-read-4417.spec.

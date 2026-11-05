@@ -120,13 +120,23 @@ async function transcribeResumable(job, buffer, file, durationSec) {
         .sort((a, b) => (a.startSec || 0) - (b.startSec || 0));
 }
 
-async function embedBatchWithBackoff(texts) {
-    const out = [];
-    for (const t of texts) {
+async function embedBatchWithBackoff(texts, userId = null) {
+    // Per-user EmbeddingCache (Phase 6B): texts already embedded under the
+    // active profile reuse the stored vector instead of a live API call.
+    const ec = require("./embeddingCache");
+    const profile = { model: geminiHelper.embeddingModel, dims: geminiHelper.EMBEDDING_DIMS || 768, taskType: "document" };
+    const hits = userId ? await ec.lookup(userId, texts, profile) : new Map();
+    const fresh = [];
+    const out = new Array(texts.length);
+    texts.forEach((t, i) => {
+        if (hits.has(i)) out[i] = hits.get(i);
+        else fresh.push({ i, t });
+    });
+    for (const { i, t } of fresh) {
         let attempt = 0;
         for (;;) {
             try {
-                out.push(await geminiHelper.getEmbedding(t, { task: "document" }));
+                out[i] = await geminiHelper.getEmbedding(t, { task: "document" });
                 break;
             } catch (e) {
                 if (isDailyQuota(e)) throw e; // no point retrying — requeued by failOrRequeue
@@ -138,6 +148,10 @@ async function embedBatchWithBackoff(texts) {
                 throw e;
             }
         }
+    }
+    if (userId && fresh.length) {
+        ec.store(userId, fresh.map(({ i, t }) => ({ text: t, vector: out[i] })).filter((e) => e.vector), profile)
+            .catch(() => {});
     }
     return out;
 }
@@ -228,7 +242,7 @@ async function processJob(job) {
     let seq = job.state.nextSeq || 0;
     for (; seq < chunkDocs.length; seq += batch) {
         const slice = chunkDocs.slice(seq, seq + batch);
-        const vectors = await embedBatchWithBackoff(slice.map((c) => c.pageContent));
+        const vectors = await embedBatchWithBackoff(slice.map((c) => c.pageContent), file.user);
         await Promise.all(slice.map((cd, i) => {
             const emb = vectors[i];
             return Chunk.updateOne(
@@ -385,6 +399,7 @@ module.exports = {
     processJob,
     failOrRequeue,
     claimNext,
+    runner, // exposed for tests/shutdown verification
     getFileBytes,
     runner,
     env,

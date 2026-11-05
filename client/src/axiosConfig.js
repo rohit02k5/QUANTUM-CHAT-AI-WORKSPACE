@@ -7,6 +7,13 @@ const baseURL = (process.env.REACT_APP_API_URL || (process.env.NODE_ENV === "pro
 const instance = axios.create({ baseURL, withCredentials: true });
 instance.baseURL = baseURL;
 
+// Last x-request-id seen — the error boundary offers "copy request id".
+instance.lastRequestId = null;
+instance.interceptors.response.use(
+  (res) => { instance.lastRequestId = res.headers?.["x-request-id"] || instance.lastRequestId; return res; },
+  (err) => { instance.lastRequestId = err.response?.headers?.["x-request-id"] || instance.lastRequestId; return Promise.reject(err); }
+);
+
 const getStorage = () =>
   localStorage.getItem("authToken") ? localStorage : sessionStorage;
 

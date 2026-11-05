@@ -27,6 +27,34 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
+  const [demoEnabled, setDemoEnabled] = useState(false);
+  const [demoLoading, setDemoLoading] = useState(false);
+
+  React.useEffect(() => {
+    axios.get("/api/v1/auth/demo-status").then((r) => {
+      setDemoEnabled(!!r.data?.enabled);
+      if (r.data?.enabled && new URLSearchParams(window.location.search).get("demo") === "1") {
+        handleDemo();
+      }
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleDemo = async () => {
+    setDemoLoading(true);
+    try {
+      const { data } = await axios.post("/api/v1/auth/demo");
+      if (!data?.token) throw new Error("no token");
+      localStorage.setItem("authToken", data.token);
+      if (data.refreshToken) localStorage.setItem("refreshToken", data.refreshToken);
+      toast.success("Welcome to the demo workspace!");
+      navigate("/");
+    } catch {
+      toast.error("Demo is not available right now");
+    } finally {
+      setDemoLoading(false);
+    }
+  };
 
   // Handle OAuth Callback
   React.useEffect(() => {
@@ -210,6 +238,19 @@ const Login = () => {
             GitHub
           </Button>
         </Box>
+
+        {demoEnabled && (
+          <Button
+            fullWidth
+            variant="contained"
+            color="secondary"
+            disabled={demoLoading}
+            onClick={handleDemo}
+            sx={{ mt: 2, borderRadius: "10px", py: 1.2 }}
+          >
+            {demoLoading ? "Opening demo…" : "Try the demo — no account needed"}
+          </Button>
+        )}
 
         <Typography variant="body2" sx={{ mt: 4, textAlign: "center", color: 'text.secondary' }}>
           Don't have an account? {' '}

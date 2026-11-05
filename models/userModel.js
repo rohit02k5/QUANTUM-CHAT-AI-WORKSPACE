@@ -17,6 +17,9 @@ const userSchema = new mongoose.Schema({
     default: () => process.env.MEMORY_DEFAULT_ON !== "false",
   },
   memoryNoticeSeen: { type: Boolean, default: false },
+  // Phase 6.4 — portfolio demo account: seeded snapshot data, restricted
+  // (no account deletion, API keys, or uploads; very low AI cap).
+  isDemo: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
 });
 

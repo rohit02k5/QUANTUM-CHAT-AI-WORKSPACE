@@ -58,8 +58,12 @@ export async function streamChat({ chatId, body, onEvent, signal }) {
     }
 
     if (!res.ok || !res.body) return { ok: false, refused: true };
+    return readSse(res.body, onEvent);
+}
 
-    const reader = res.body.getReader();
+/** Shared SSE reader — used by live streams and recorded replays alike. */
+async function readSse(body, onEvent) {
+    const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let sawEvent = false;
@@ -90,4 +94,26 @@ export async function streamChat({ chatId, body, onEvent, signal }) {
         return { ok: false, refused: !sawEvent };
     }
     return { ok: true, refused: false };
+}
+
+/**
+ * Stream a recorded demo replay (GET /api/v1/demo/replay/:id) through the
+ * SAME SSE reader as live streams. Events are labelled replay:true — the UI
+ * must show "Recorded replay, not a live model call".
+ */
+export async function streamReplay({ scenario, onEvent, signal }) {
+    const doFetch = () =>
+        fetch(`${API_BASE}/api/v1/demo/replay/${scenario}`, {
+            method: "GET",
+            headers: { Authorization: `Bearer ${getToken()}` },
+            signal,
+        });
+    let res = await doFetch();
+    if (res.status === 401) {
+        const newToken = await refreshTokenOnce();
+        if (!newToken) return { ok: false, refused: true };
+        res = await doFetch();
+    }
+    if (!res.ok || !res.body) return { ok: false, refused: true };
+    return readSse(res.body, onEvent);
 }

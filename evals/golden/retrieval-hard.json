@@ -1,0 +1,92 @@
+[
+  {
+    "id": "hard-err-01",
+    "category": "error-code",
+    "query": "What is the workaround for ERR-8821-C?",
+    "gold": [{ "f": "h02-incident-err8821.txt", "m": "LEASE_RENEW=off" }]
+  },
+  {
+    "id": "hard-err-02",
+    "category": "error-code",
+    "query": "ERR-4417-A rollback marker",
+    "gold": [{ "f": "h01-incident-err4417.txt", "m": "COH-ROLL-4417" }]
+  },
+  {
+    "id": "hard-err-03",
+    "category": "error-code",
+    "query": "which incident was fixed by assembler build 9.0.44?",
+    "gold": [{ "f": "h03-incident-err1093.txt", "m": "ERR-1093-F" }]
+  },
+  {
+    "id": "hard-err-04",
+    "category": "error-code",
+    "query": "ERR-1093-F workaround",
+    "gold": [{ "f": "h03-incident-err1093.txt", "m": "ASSEMBLER_POOL_SIZE=1" }]
+  },
+  {
+    "id": "hard-err-05",
+    "category": "error-code",
+    "query": "what does CLOCK_SKEW_GUARD_MS do",
+    "gold": [{ "f": "h02-incident-err8821.txt", "m": "CLOCK_SKEW_GUARD_MS=1200" }]
+  },
+  {
+    "id": "hard-sku-01",
+    "category": "sku",
+    "query": "torque spec for ZXQ-88412-T",
+    "gold": [{ "f": "h04-sku-zxq88412.txt", "m": "18.5 N·m" }]
+  },
+  {
+    "id": "hard-sku-02",
+    "category": "sku",
+    "query": "torque spec for ZXQ-88413-T",
+    "gold": [{ "f": "h05-sku-zxq88413.txt", "m": "16.0 N·m" }]
+  },
+  {
+    "id": "hard-sku-03",
+    "category": "sku",
+    "query": "which bracket fits Meridian revision C rails",
+    "gold": [{ "f": "h05-sku-zxq88413.txt", "m": "revision C and earlier" }]
+  },
+  {
+    "id": "hard-sku-04",
+    "category": "sku",
+    "query": "what part does ZXQ-88412-T supersede",
+    "gold": [{ "f": "h04-sku-zxq88412.txt", "m": "ZXQ-88410-T" }]
+  },
+  {
+    "id": "hard-ver-01",
+    "category": "version-string",
+    "query": "pre-upgrade script for v3.7.19-rc.2",
+    "gold": [{ "f": "h06-changelog-v3719.txt", "m": "precheck-3719.sh" }]
+  },
+  {
+    "id": "hard-ver-02",
+    "category": "version-string",
+    "query": "known issue upgrading to v3.7.20-rc.1",
+    "gold": [{ "f": "h07-changelog-v3720.txt", "m": "reboot twice" }]
+  },
+  {
+    "id": "hard-ver-03",
+    "category": "version-string",
+    "query": "v3.7.20-rc.1 skew_estimate_ms",
+    "gold": [{ "f": "h07-changelog-v3720.txt", "m": "skew_estimate_ms" }]
+  },
+  {
+    "id": "hard-name-01",
+    "category": "rare-name",
+    "query": "what is the Quenzel-Parrish estimator",
+    "gold": [{ "f": "h08-glossary.txt", "m": "inter-arrival times" }]
+  },
+  {
+    "id": "hard-name-02",
+    "category": "rare-name",
+    "query": "Miriadne protocol phase two",
+    "gold": [{ "f": "h08-glossary.txt", "m": "three-phase barrier release" }]
+  },
+  {
+    "id": "hard-name-03",
+    "category": "rare-name",
+    "query": "Tolliver's bound read skew threshold",
+    "gold": [{ "f": "h08-glossary.txt", "m": "0.5%" }]
+  }
+]

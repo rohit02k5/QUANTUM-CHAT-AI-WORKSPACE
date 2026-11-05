@@ -1,0 +1,15 @@
+Incident Report ERR-1093-F — Ingestion Pipeline
+
+Severity: medium. Reported 2026-05-19. The ingestion pipeline dropped a small
+fraction of binary attachments during high-throughput windows. Affected uploads
+showed a truncated checksum trailer and retried cleanly on resubmission.
+
+Root cause: the chunk assembler reused a buffer that the compressor had already
+released back to the pool, corrupting the final 64 bytes of roughly one in
+40,000 uploads.
+
+Workaround for ERR-1093-F: set ASSEMBLER_POOL_SIZE=1 to serialize buffer reuse
+until assembler build 9.0.44. Rollback marker: ING-ROLL-1093.
+
+Resolution: fixed in assembler build 9.0.44; a checksum-trailer audit now runs
+on every thousandth upload.

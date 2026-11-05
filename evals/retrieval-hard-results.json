@@ -1,0 +1,138 @@
+{
+  "note": "Phase 6.1 hybrid-discrimination check on evals/golden/retrieval-hard.json (15 identifier-adversarial queries: error codes, SKUs, version strings, rare names). Generated with real gemini-embedding-2 embeddings on mongodb-memory-server (local cosine + $text index). Decision rule: hybrid ON only if overall MRR improves AND no category regresses >0.03.",
+  "runAt": "2026-11-05",
+  "embeddingModel": "gemini-embedding-2",
+  "gold": "evals/golden/retrieval-hard.json",
+  "modes": {
+    "vector": {
+      "n": 15,
+      "hitAt1": 0.7333,
+      "hitAt3": 1,
+      "hitAt5": 1,
+      "mrr": 0.8667,
+      "p50LatencyMs": 718
+    },
+    "hybrid": {
+      "n": 15,
+      "hitAt1": 0.7333,
+      "hitAt3": 1,
+      "hitAt5": 1,
+      "mrr": 0.8667,
+      "p50LatencyMs": 21
+    },
+    "keyword": {
+      "n": 15,
+      "hitAt1": 0.8,
+      "hitAt3": 0.8,
+      "hitAt5": 0.8,
+      "mrr": 0.8,
+      "p50LatencyMs": 8
+    }
+  },
+  "perCategory": {
+    "vector": {
+      "error-code": {
+        "n": 5,
+        "hitAt1": 0.8,
+        "hitAt3": 1,
+        "hitAt5": 1,
+        "mrr": 0.9,
+        "p50LatencyMs": 637
+      },
+      "sku": {
+        "n": 4,
+        "hitAt1": 0.5,
+        "hitAt3": 1,
+        "hitAt5": 1,
+        "mrr": 0.75,
+        "p50LatencyMs": 806
+      },
+      "version-string": {
+        "n": 3,
+        "hitAt1": 1,
+        "hitAt3": 1,
+        "hitAt5": 1,
+        "mrr": 1,
+        "p50LatencyMs": 717
+      },
+      "rare-name": {
+        "n": 3,
+        "hitAt1": 0.6667,
+        "hitAt3": 1,
+        "hitAt5": 1,
+        "mrr": 0.8333,
+        "p50LatencyMs": 808
+      }
+    },
+    "hybrid": {
+      "error-code": {
+        "n": 5,
+        "hitAt1": 0.8,
+        "hitAt3": 1,
+        "hitAt5": 1,
+        "mrr": 0.9,
+        "p50LatencyMs": 26
+      },
+      "sku": {
+        "n": 4,
+        "hitAt1": 0.5,
+        "hitAt3": 1,
+        "hitAt5": 1,
+        "mrr": 0.75,
+        "p50LatencyMs": 27
+      },
+      "version-string": {
+        "n": 3,
+        "hitAt1": 1,
+        "hitAt3": 1,
+        "hitAt5": 1,
+        "mrr": 1,
+        "p50LatencyMs": 19
+      },
+      "rare-name": {
+        "n": 3,
+        "hitAt1": 0.6667,
+        "hitAt3": 1,
+        "hitAt5": 1,
+        "mrr": 0.8333,
+        "p50LatencyMs": 20
+      }
+    },
+    "keyword": {
+      "error-code": {
+        "n": 5,
+        "hitAt1": 0.8,
+        "hitAt3": 0.8,
+        "hitAt5": 0.8,
+        "mrr": 0.8,
+        "p50LatencyMs": 8
+      },
+      "sku": {
+        "n": 4,
+        "hitAt1": 1,
+        "hitAt3": 1,
+        "hitAt5": 1,
+        "mrr": 1,
+        "p50LatencyMs": 7
+      },
+      "version-string": {
+        "n": 3,
+        "hitAt1": 1,
+        "hitAt3": 1,
+        "hitAt5": 1,
+        "mrr": 1,
+        "p50LatencyMs": 8
+      },
+      "rare-name": {
+        "n": 3,
+        "hitAt1": 0.3333,
+        "hitAt3": 0.3333,
+        "hitAt5": 0.3333,
+        "mrr": 0.3333,
+        "p50LatencyMs": 8
+      }
+    }
+  },
+  "perQueryDiffsHybridVsVector": 0,
+  "conclusion": "Hybrid produced ZERO rank changes vs vector-only even on an identifier-adversarial set (keyword leg hit@1=1.0 on SKU/version categories, but RRF fusion did not reorder a single query). Hybrid remains OFF by the default rule."
+}
