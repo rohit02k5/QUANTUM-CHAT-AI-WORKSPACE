@@ -64,6 +64,23 @@ services:
         value: "3"
       - key: RAG_MIN_SCORE
         value: "0.5"
+      # Phase 4 retrieval knobs — see DECISIONS.md for measured defaults
+      - key: RAG_HYBRID
+        value: "false"   # measured: ties vector-only, off by default
+      - key: RAG_RRF_K
+        value: "60"
+      - key: RAG_KEYWORD_MIN_SCORE
+        value: "3"
+      - key: RAG_KEYWORD_WEIGHT
+        value: "0.5"
+      - key: RAG_RERANK
+        value: "false"   # +1 call/query, ~400ms, no MRR gain measured
+      - key: RAG_REWRITE
+        value: "true"    # follow-up MRR 0.40->0.70 live-measured
+      - key: SEARCH_MAX_CHATS
+        value: "500"
+      - key: SUMMARY_REFRESH_EVERY
+        value: "10"
       - key: AI_RATE_MAX
         value: "100"
       - key: LOG_LEVEL

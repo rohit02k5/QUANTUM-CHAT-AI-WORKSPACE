@@ -1,0 +1,1 @@
+A qubit holds a superposition of 0 and 1 described by two complex amplitudes whose squared magnitudes sum to one. Measuring a qubit collapses the superposition to a definite classical bit.

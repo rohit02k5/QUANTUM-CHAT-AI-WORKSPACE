@@ -1,0 +1,1 @@
+Recall@k asks whether the right document appears in the top k results; MRR rewards higher ranks. A retriever can have perfect recall@5 and still be useless if the right answer is always rank five.

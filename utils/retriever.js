@@ -5,6 +5,16 @@ const VECTOR_INDEX = process.env.ATLAS_VECTOR_SEARCH_INDEX || "chunks_embedding_
 const EMBEDDING_DIM = parseInt(process.env.EMBEDDING_DIMS || "768", 10);
 const EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2";
 const MIN_SCORE = parseFloat(process.env.RAG_MIN_SCORE || "0.5");
+const CANDIDATES = parseInt(process.env.RAG_CANDIDATES || "20", 10);
+const RRF_K = parseInt(process.env.RAG_RRF_K || "60", 10);
+const HYBRID = process.env.RAG_HYBRID === "true";
+const TEXT_INDEX = "chunks_text_search";
+// Keyword admission: a Mongo textScore is roughly 1 point per matched term.
+// >=3 means at least ~3 query terms matched — strong enough lexical evidence
+// to admit an exact identifier while single/stray-term matches stay out.
+// Measured on the stress set: 1-2 terms injects enough noise to regress
+// near-duplicate and paraphrase categories under RRF; 3 ties vector-only.
+const KEYWORD_MIN_SCORE = parseFloat(process.env.RAG_KEYWORD_MIN_SCORE || "3");
 
 // $vectorSearch on a collection without the index returns [] (no error) on
 // Atlas, so a missing index can never reach the cosine fallback. Check it
@@ -25,6 +35,70 @@ async function vectorIndexAvailable() {
     }
 }
 
+let _textIndexVerified = false;
+async function textIndexAvailable() {
+    if (_textIndexVerified) return true;
+    try {
+        const idx = await mongoose.connection.collection("chunks").listIndexes().toArray();
+        _textIndexVerified = idx.some((i) => i.name === TEXT_INDEX);
+        return _textIndexVerified;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Ensure the keyword-leg index exists: compound {user:1, text:"text"} —
+ * the user equality prefix keeps every $text query owner-scoped at the
+ * index level. default_language "none" is deliberate: it disables stemming
+ * and stop-words, which hurt non-English corpora less than they help
+ * English (no new Atlas Search index; this is a regular Mongo index).
+ * Any conflicting text index is dropped first (Mongo allows exactly one
+ * text index per collection). Idempotent; called once at server boot.
+ */
+async function ensureTextIndex() {
+    const coll = mongoose.connection.collection("chunks");
+    // listIndexes throws NamespaceNotFound on a fresh DB — treat as none.
+    const idx = await coll.listIndexes().toArray().catch(() => []);
+    for (const i of idx) {
+        const isText = Object.values(i.key || {}).includes("text");
+        if (isText && i.name !== TEXT_INDEX) await coll.dropIndex(i.name).catch(() => {});
+    }
+    await coll.createIndex(
+        { user: 1, text: "text" },
+        { name: TEXT_INDEX, default_language: "none" }
+    );
+    _textIndexVerified = true;
+    return TEXT_INDEX;
+}
+
+// The keyword leg is a RESCUE leg: it exists to surface exact identifiers the
+// vector leg misses, not to reorder semantic hits. An unweighted leg lets
+// noisy lexical matches outrank the best vector hit (measured: paraphrase and
+// near-duplicate categories regressed). Weighting keyword contribution at
+// RAG_KEYWORD_WEIGHT (default 0.5) keeps a keyword-only hit below the top
+// vector hit while still boosting docs found by both legs.
+const KEYWORD_WEIGHT = parseFloat(process.env.RAG_KEYWORD_WEIGHT || "0.5");
+
+/** Reciprocal Rank Fusion — score(doc) = Σ weight/(k + rank). */
+function rrf(lists, k = RRF_K) {
+    const fused = new Map(); // chunkId -> {chunk, fused, legs}
+    lists.forEach(({ leg, weight = 1, results }) => {
+        results.forEach((c, rank) => {
+            const id = c._id.toString();
+            const e = fused.get(id) || { chunk: c, fused: 0, legs: [] };
+            e.fused += weight / (k + rank + 1);
+            e.legs.push(leg);
+            // Merge leg scores without losing the richer doc
+            if (leg === "vector") e.vectorScore = c.score;
+            if (leg === "keyword") e.keywordScore = c.score;
+            e.chunk = c;
+            fused.set(id, e);
+        });
+    });
+    return [...fused.values()].sort((a, b) => b.fused - a.fused);
+}
+
 /**
  * Retrieve the top-K most relevant chunks for a user query.
  *
@@ -32,15 +106,18 @@ async function vectorIndexAvailable() {
  * @param {string} query
  * @param {number} topK
  * @param {string[]|ObjectId[]} [fileIds] - optional: scope retrieval to these files only
+ * @param {object} [opts] - {mode:"vector"|"keyword"|"hybrid", candidates}
  *
- * Each returned item has:
- *   text        - chunk content (pageContent)
- *   originalName - source filename
- *   metadata     - chunk metadata (page, chunkIndex, chunkTotal, ...)
- *   score        - normalized cosine similarity
- *   fileId       - parent File _id
+ * Every returned item keeps the backward-compatible shape and adds:
+ *   score        - vector cosine when the chunk came from the vector leg,
+ *                  else the fused score (never a fake cosine for keyword hits)
+ *   scores       - {vector?, keyword?, fused}
+ *   matchedBy    - ["vector"] | ["keyword"] | ["vector","keyword"]
+ *   text, pageContent, originalName, metadata, fileId, type (as before)
  */
-async function retrieveChunks(userId, query, topK = 3, fileIds = []) {
+async function retrieveChunks(userId, query, topK = 3, fileIds = [], opts = {}) {
+    const mode = opts.mode || (HYBRID ? "hybrid" : "vector");
+    const candidates = opts.candidates || CANDIDATES;
     const userObjectId =
         userId instanceof mongoose.Types.ObjectId ? userId : new mongoose.Types.ObjectId(userId);
     const fileObjectIds = (fileIds || [])
@@ -62,90 +139,151 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = []) {
         : readyFiles.map((f) => f._id);
     if (!scopedIds.length) return [];
 
-    // 1. Embed the query (task-typed for retrieval)
-    let queryVector;
-    try {
-        queryVector = await geminiHelper.getEmbedding(query, { task: "query" });
-        if (!Array.isArray(queryVector) || queryVector.length !== EMBEDDING_DIM) {
-            console.warn("[Retriever] Query embedding dimension mismatch:", queryVector?.length);
-            return [];
-        }
-    } catch (err) {
-        console.warn("[Retriever] Query embedding failed:", err.message);
-        return [];
-    }
-
-    // 2. Try Atlas Vector Search
     const scopeFilter = { user: userObjectId, file: { $in: scopedIds } };
-    // Only chunks embedded at the active dimensionality are comparable
-    const vectorFilter = { ...scopeFilter, embeddingDims: EMBEDDING_DIM };
+    // Both legs apply identical filters: owner, file scope, ready-only files,
+    // and embedding-model/dims match (a chunk from another config is never
+    // returned, whichever leg found it).
+    const dimsFilter = {
+        $and: [
+            // Model must match the active embedding config; chunks that
+            // predate the field (legacy) are tolerated, an explicit
+            // DIFFERENT model is a real mismatch and ignored.
+            { $or: [{ embeddingModel: EMBEDDING_MODEL }, { embeddingModel: { $exists: false } }] },
+            {
+                $or: [
+                    { embeddingDims: EMBEDDING_DIM },
+                    { embeddingDims: { $exists: false }, embedding: { $size: EMBEDDING_DIM } },
+                ],
+            },
+        ],
+    };
 
-    if (await vectorIndexAvailable()) try {
-        const chunks = await mongoose.connection.collection("chunks").aggregate([
-            {
-                $vectorSearch: {
-                    index: VECTOR_INDEX,
-                    path: "embedding",
-                    queryVector,
-                    numCandidates: Math.max(topK * 10, 20),
-                    limit: topK,
-                    filter: vectorFilter,
-                    similarity: "cosine",
-                },
-            },
-            {
-                $lookup: { from: "files", localField: "file", foreignField: "_id", as: "fileDoc" },
-            },
-            {
-                $project: {
-                    text: 1,
-                    pageContent: 1,
-                    metadata: 1,
-                    type: 1,
-                    fileId: "$file",
-                    originalName: { $arrayElemAt: ["$fileDoc.originalName", 0] },
-                    score: { $meta: "vectorSearchScore" },
-                },
-            },
-        ]).toArray();
-        // Drop weak matches — irrelevant chunks shouldn't pollute the prompt
-        return chunks.filter((c) => c.score === undefined || c.score >= MIN_SCORE);
-    } catch (err) {
-        console.warn("[Retriever] Atlas vector search unavailable, using local fallback...");
-    } else {
-        console.warn(`[Retriever] vector index '${VECTOR_INDEX}' not found, using local fallback...`);
+    // ---- vector leg ----
+    let vectorResults = [];
+    if (mode !== "keyword") {
+        let queryVector;
+        try {
+            queryVector = await geminiHelper.getEmbedding(query, { task: "query" });
+            if (!Array.isArray(queryVector) || queryVector.length !== EMBEDDING_DIM) queryVector = null;
+        } catch { queryVector = null; }
+
+        if (queryVector) {
+            if (await vectorIndexAvailable()) try {
+                vectorResults = await mongoose.connection.collection("chunks").aggregate([
+                    {
+                        $vectorSearch: {
+                            index: VECTOR_INDEX,
+                            path: "embedding",
+                            queryVector,
+                            numCandidates: Math.max(candidates * 10, 100),
+                            limit: candidates,
+                            filter: {
+                                ...scopeFilter,
+                                embeddingDims: EMBEDDING_DIM,
+                                $or: [{ embeddingModel: EMBEDDING_MODEL }, { embeddingModel: { $exists: false } }],
+                            },
+                            similarity: "cosine",
+                        },
+                    },
+                    { $project: { text: 1, pageContent: 1, metadata: 1, type: 1, file: 1, score: { $meta: "vectorSearchScore" } } },
+                ]).toArray();
+                vectorResults = vectorResults.filter((c) => c.score === undefined || c.score >= MIN_SCORE);
+            } catch {
+                vectorResults = [];
+            }
+            if (!vectorResults.length) {
+                // Cosine fallback — index missing/erroring or Atlas leg empty.
+                const allChunks = await mongoose.connection.collection("chunks").find({
+                    ...scopeFilter, ...dimsFilter,
+                }).toArray();
+                vectorResults = allChunks
+                    .map((c) => ({ ...c, score: cosineSimilarity(queryVector, c.embedding) }))
+                    .filter((c) => c.score >= MIN_SCORE)
+                    .sort((a, b) => b.score - a.score)
+                    .slice(0, candidates);
+            }
+        }
     }
 
-    // 3. Local fallback: cosine similarity over this user's chunks.
-    // Only consider chunks embedded with the active dims — stale chunks from
-    // an older embedding config can't be compared.
-    const allChunks = await mongoose.connection.collection("chunks").find({
-        ...scopeFilter,
-        $or: [{ embeddingDims: EMBEDDING_DIM }, { embeddingDims: { $exists: false }, embedding: { $size: EMBEDDING_DIM } }],
-    }).toArray();
-    const scored = allChunks
-        .map((c) => ({
-            ...c,
-            fileId: c.file,
-            score: cosineSimilarity(queryVector, c.embedding),
-        }))
-        .filter((c) => c.score >= MIN_SCORE)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, topK);
+    // ---- keyword leg (Mongo text index — owner-scoped by index prefix) ----
+    let keywordResults = [];
+    if (mode !== "vector" && query.trim()) {
+        try {
+            if (!(await textIndexAvailable())) throw new Error("text index missing");
+            keywordResults = await mongoose.connection.collection("chunks")
+                .find(
+                    { ...scopeFilter, ...dimsFilter, $text: { $search: query } },
+                    { projection: { text: 1, pageContent: 1, metadata: 1, type: 1, file: 1, score: { $meta: "textScore" } } }
+                )
+                .sort({ score: { $meta: "textScore" } })
+                .limit(candidates)
+                .toArray();
+            keywordResults = keywordResults.filter((c) => c.score >= KEYWORD_MIN_SCORE);
+        } catch {
+            keywordResults = [];
+        }
+    }
 
-    // Enrich with filename
-    const scoredFileIds = [...new Set(scored.map((c) => c.fileId))];
-    const files = await mongoose.connection.collection("files").find({ _id: { $in: scoredFileIds } }).toArray();
+    // ---- fuse / select ----
+    let merged;
+    if (mode === "vector") {
+        merged = vectorResults.slice(0, topK).map((c) => ({
+            c, vectorScore: c.score, fused: c.score, legs: ["vector"],
+        }));
+    } else if (mode === "keyword") {
+        merged = keywordResults.slice(0, topK).map((c) => ({
+            c, keywordScore: c.score, fused: c.score, legs: ["keyword"],
+        }));
+    } else {
+        merged = rrf([
+            { leg: "vector", results: vectorResults },
+            { leg: "keyword", results: keywordResults, weight: KEYWORD_WEIGHT },
+        ]).slice(0, topK).map((e) => ({ ...e, c: e.chunk }));
+    }
+    if (!merged.length) return [];
+
+    // Optional LLM rerank (RAG_RERANK / opts.rerank) — silently falls back
+    // to the fused order on any error, invalid output, or timeout.
+    if (opts.rerank === true || (opts.rerank !== false && process.env.RAG_RERANK === "true")) {
+        const byId = new Map(merged.map((m) => [String(m.c._id), m]));
+        const reranked = await require("./rerank").rerankChunks({
+            userId, query,
+            chunks: merged.map((m) => m.c),
+        });
+        merged = reranked.map((c) => byId.get(String(c._id)) || { c, fused: 0, legs: [] });
+    }
+
+    // Enrich with filenames for the citation layer.
+    const fileIdSet = [...new Set(merged.map((m) => (m.c.file || m.c.fileId).toString()))];
+    const files = await mongoose.connection.collection("files")
+        .find({ _id: { $in: fileIdSet.map((id) => new mongoose.Types.ObjectId(id)) } })
+        .toArray();
     const nameMap = new Map(files.map((f) => [f._id.toString(), f.originalName]));
 
-    return scored.map((c) => ({
-        text: c.text || c.pageContent || "",
-        pageContent: c.pageContent || c.text || "",
-        metadata: c.metadata || {},
-        fileId: c.fileId,
-        originalName: nameMap.get(c.fileId?.toString()) || "Unknown Source",
-        score: c.score,
-    }));
+    return merged.map((m) => {
+        const c = m.c;
+        const fileId = c.file || c.fileId;
+        const matchedBy = m.legs;
+        return {
+            _id: c._id,
+            text: c.text || c.pageContent || "",
+            pageContent: c.pageContent || c.text || "",
+            metadata: c.metadata || {},
+            type: c.type,
+            fileId,
+            originalName: nameMap.get(fileId?.toString()) || "Unknown Source",
+            // Backward compat: `score` stays a vector cosine when there is
+            // one; keyword-only hits get the fused score so chips never show
+            // a misleading cosine number.
+            score: m.vectorScore ?? m.fused,
+            scores: {
+                vector: m.vectorScore,
+                keyword: m.keywordScore,
+                fused: m.fused,
+            },
+            matchedBy,
+        };
+    });
 }
 
 /** Format chunks into a prompt context block with citations metadata. */
@@ -171,4 +309,16 @@ function cosineSimilarity(a, b) {
     return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
-module.exports = { retrieveChunks, buildContext, VECTOR_INDEX };
+/** Exposed for tests and the retrieval eval. */
+module.exports = {
+    retrieveChunks,
+    buildContext,
+    cosineSimilarity,
+    VECTOR_INDEX,
+    TEXT_INDEX,
+    EMBEDDING_MODEL,
+    EMBEDDING_DIMS: EMBEDDING_DIM,
+    ensureTextIndex,
+    rrf,
+    _resetIndexCache: () => { _indexVerified = false; _textIndexVerified = false; },
+};

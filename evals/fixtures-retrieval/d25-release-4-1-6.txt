@@ -1,0 +1,1 @@
+Release 4.1.6 added SSE heartbeats but shipped a regression: the first streamed token could be dropped when buffering was enabled. It is superseded by 4.1.7 — do not deploy 4.1.6 to production.

@@ -1,0 +1,1 @@
+Release 4.1.7 fixes the memory leak in the PDF renderer and upgrades the tokenizer. Install it with `npm i quantum-cli@4.1.7`. Release 4.1.6 had a regression in streaming responses and should be skipped.

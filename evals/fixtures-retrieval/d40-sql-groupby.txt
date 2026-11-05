@@ -1,0 +1,1 @@
+SQL's GROUP BY collapses rows into groups for aggregate functions like AVG and SUM. Unlike pandas transform, SQL cannot broadcast an aggregate back to detail rows without a window function such as AVG() OVER (PARTITION BY region).

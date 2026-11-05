@@ -101,6 +101,42 @@ Quantum is built with a **security-first architecture**, clearly demonstrated by
 - **MongoDB Atlas `$vectorSearch`** as the primary path (auto-created index)  
 - **Local cosine-similarity fallback** — works on any MongoDB, no Atlas required  
 - Similarity threshold (`RAG_MIN_SCORE`) filters out irrelevant context  
+- **Optional hybrid retrieval** (`RAG_HYBRID`): a regular MongoDB **text index**
+  `{ user: 1, text: "text" }` runs an owner-scoped keyword leg in parallel,
+  fused with the vector leg via **Reciprocal Rank Fusion** (`RAG_RRF_K=60`).
+  The keyword leg is a *rescue* leg for exact identifiers — a strict
+  textScore admission threshold (`RAG_KEYWORD_MIN_SCORE=3`) and a lower RRF
+  weight keep lexical noise out. Every filter (owner, READY files, file
+  scoping, embedding model/dims) applies identically to both legs, and the
+  keyword leg still works when the vector index is missing.
+- **Query rewriting** (`RAG_REWRITE`, default ON): context-dependent
+  follow-ups ("How long does *it* take?") are condensed into standalone
+  queries using the last 4 turns as data — for retrieval only; the stored
+  message is untouched and failures fall back to the original. Measured
+  +0.045 overall MRR (follow-up category 0.40 → 0.70).
+- **Optional LLM rerank** (`RAG_RERANK`, default OFF): reorders the top 15
+  fused candidates on the cheapest model with a 4s timeout, ID-subset
+  validation, and a 1h Mongo cache. Measured: identical MRR for +1 call/query
+  and ~400ms — off until it earns its cost.
+
+```mermaid
+flowchart LR
+    Q[user message] --> RW{context-dependent?}
+    RW -- yes --> RWQ[standalone query<br/>cheapest model]
+    RW -- no --> E
+    RWQ --> E[embed query]
+    E --> VL[vector leg<br/>Atlas $vectorSearch<br/>or cosine fallback]
+    E --> KL[keyword leg<br/>regular text index<br/>user:1 + text]
+    KL --> ADMIT{textScore >= 3?}
+    ADMIT -- yes --> FUSE[RRF fusion k=60]
+    VL --> FUSE
+    FUSE --> RR{RAG_RERANK?}
+    RR -- yes --> RRO[LLM reorder top 15<br/>validated, cached]
+    RR -- no --> K[top-K]
+    RRO --> K
+    K --> G[guard.wrapSources<br/>untrusted data]
+    G --> LLM[Gemini answer<br/>+ citation chips]
+```
 
 ### Chat Integration
 - Retrieval runs **automatically** when you have indexed documents — just ask  
@@ -292,6 +328,28 @@ cases), scoring **hit@k, MRR, faithfulness, relevance, fact coverage,
 abstention accuracy, and injection-safety**. Reports land in
 `evals/reports/`; the run fails if a metric regresses more than
 `EVAL_REGRESSION_THRESHOLD` vs `evals/baseline.json`.
+
+A second, retrieval-only stress harness (`npm run eval:retrieval`, or
+`scripts/gen-retrieval-fixtures.js` + `scripts/eval-retrieval.js`) measures
+40 labelled queries over 40 self-written distractor documents across five
+categories — paraphrase, exact-identifier, multi-document, near-duplicate,
+and pronoun-dependent follow-ups — and caches query embeddings on disk so
+reruns cost zero API calls.
+
+### Retrieval ablation (40-query stress set, in-memory)
+
+| config | hit@1 | hit@3 | hit@5 | MRR | p50 | extra calls/query |
+|---|---|---|---|---|---|---|
+| vector-only (baseline) | 0.83 | 0.90 | 0.95 | **0.87** | 586ms | 0 |
+| keyword-only | 0.33 | 0.38 | 0.38 | 0.35 | 8ms | 0 |
+| hybrid (RRF k=60) | 0.83 | 0.90 | 0.95 | 0.87 | ~20ms | 0 |
+| hybrid + rerank | 0.83 | 0.90 | 0.95 | 0.87 | ~450ms | +1 |
+| vector + rewrite (live) | **0.88** | **0.95** | **0.98** | **0.92** | — | ~0.15* |
+
+*rewrite only fires on context-dependent follow-ups (~6/40 queries);
+follow-up category MRR 0.40 → 0.70. Default config: **vector + rewrite ON,
+hybrid and rerank OFF** — hybrid never beat vector-only on this set and
+rerank buys no MRR; both stay opt-in. See `docs/DECISIONS.md`.
 
 | metric | Phase 0 (no guardrails) | Phase 1 (guardrails on) | Phase 3B |
 |---|---|---|---|

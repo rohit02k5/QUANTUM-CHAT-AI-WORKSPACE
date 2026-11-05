@@ -1,0 +1,1 @@
+Reciprocal Rank Fusion combines ranked lists by summing 1/(k+rank) across legs. With k=60, the top item of each list scores about 0.0164; documents found by every leg rise smoothly to the top of the fused ranking.

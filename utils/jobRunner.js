@@ -37,6 +37,14 @@ const log = () => logger.child ? logger.child({ module: "jobRunner" }) : logger;
 const isTransient = (e) =>
     e?.status === 429 || (e?.status >= 500 && e?.status < 600) || /Overloaded|rate limit|RESOURCE_EXHAUSTED/i.test(e?.message || "");
 
+// Daily-quota errors must not be retried inside the pipeline — the job is
+// requeued with a notBefore delay instead (failOrRequeue).
+const isDailyQuota = (e) => geminiHelper.classifyError(e).kind === "daily-quota";
+
+// How long to wait when the API doesn't tell us. Free-tier daily quotas reset
+// within hours; 15 min keeps the queue responsive without hammering.
+const QUOTA_WAIT_DEFAULT_MS = parseInt(process.env.QUOTA_WAIT_MS || String(15 * 60 * 1000), 10);
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Fetch the raw bytes of a stored file (GridFS first, legacy disk fallback). */
@@ -121,6 +129,7 @@ async function embedBatchWithBackoff(texts) {
                 out.push(await geminiHelper.getEmbedding(t, { task: "document" }));
                 break;
             } catch (e) {
+                if (isDailyQuota(e)) throw e; // no point retrying — requeued by failOrRequeue
                 if (isTransient(e) && attempt < 3) {
                     await sleep(Math.min(1000 * 2 ** attempt, 10000));
                     attempt++;
@@ -265,8 +274,21 @@ async function processJob(job) {
     return job;
 }
 
-/** Failure handling: requeue until max attempts, then mark failed. */
+/** Failure handling: requeue until max attempts, then mark failed. Daily
+ *  AI-quota failures are NOT failures — the job waits for the quota window
+ *  (notBefore) and attempts are left untouched (undo the claim increment). */
 async function failOrRequeue(job, err) {
+    const cls = geminiHelper.classifyError(err);
+    if (cls.kind === "daily-quota") {
+        job.status = "queued";
+        job.lockedAt = undefined;
+        job.attempts = Math.max(0, job.attempts - 1); // undo the claim increment
+        job.notBefore = new Date(Date.now() + (cls.retryAfterMs || QUOTA_WAIT_DEFAULT_MS));
+        job.error = "Waiting for AI quota";
+        await job.save();
+        log().info({ jobId: job._id.toString(), notBefore: job.notBefore }, "ingestion paused — waiting for AI quota");
+        return job;
+    }
     job.error = (err?.message || "ingestion failed").slice(0, 500);
     if (job.attempts >= env.maxAttempts()) {
         job.status = "failed";
@@ -288,9 +310,10 @@ async function failOrRequeue(job, err) {
 const runner = { timer: null, stopping: false, active: new Set() };
 
 async function claimNext() {
+    const now = new Date();
     return IngestionJob.findOneAndUpdate(
-        { status: "queued" },
-        { $set: { status: "processing", lockedAt: new Date() }, $inc: { attempts: 1 } },
+        { status: "queued", $or: [{ notBefore: null }, { notBefore: { $lte: now } }] },
+        { $set: { status: "processing", lockedAt: now }, $unset: { notBefore: 1 }, $inc: { attempts: 1 } },
         { sort: { createdAt: 1 }, new: true }
     );
 }

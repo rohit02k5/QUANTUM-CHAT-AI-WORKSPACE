@@ -88,15 +88,18 @@ async function main() {
         // 2. Deep analysis → figure chunks
         const da = await request(app).post(`/api/v1/files/${pdfFile._id}/deep-analysis`)
             .set(auth).send({ pageStart: 1, pageEnd: 2 });
-        if (da.status === 201 || da.status === 202) {
-            // wait for job
+        // 201/202 = queued; 200 = INGEST_SYNC completed in-request
+        if ([200, 201, 202].includes(da.status)) {
             const IngestionJob = require("../models/IngestionJob");
             const job = await IngestionJob.findById(da.body.jobId);
             if (job.status === "failed" && /429|503|quota/i.test(job.error || "")) {
                 quotaSkip("deep analysis", job.error);
             } else {
-                const figs = await Chunk.countDocuments({ file: pdfFile._id, type: "figure" });
-                step("figure chunks stored", figs > 0, `${figs} chunks, job ${job.status}`);
+                // Items land as type figure or text (scanned_text) — model's
+                // call; assert deep-analysis chunks were stored for the range.
+                const deepChunks = await Chunk.find({ file: pdfFile._id, "metadata.deepIdx": { $exists: true } }).select("type metadata.page").lean();
+                const types = [...new Set(deepChunks.map((c) => c.type))].join(",");
+                step("deep-analysis chunks stored", deepChunks.length > 0, `${deepChunks.length} chunks (${types}), job ${job.status}`);
                 step("deepAnalyzedPages tracked", (await File.findById(pdfFile._id))?.deepAnalyzedPages?.length === 2);
             }
         } else if (!quotaSkip("deep analysis", da.body?.message || `status ${da.status}`)) {
@@ -164,8 +167,14 @@ async function main() {
         try {
             await runDeepAnalysis(job2, await File.findById(pdfFile._id));
             const j2 = await IngestionJob2.findById(job2._id);
-            const figChunks = await Chunk.find({ file: pdfFile._id, type: "figure", "metadata.page": 4 });
-            step("resumed job completes unfinished windows", j2.status === "done" && figChunks.length > 0, `status ${j2.status}, p4 figs ${figChunks.length}`);
+            // Resume semantics: window 0 was already done, window 1 must run and
+            // complete. Whether the model finds a figure on p4 is content-
+            // dependent — assert the windows state + prior items preserved.
+            const doneWins = j2.state?.deepAnalysis?.doneWindows || [];
+            const items = j2.state?.deepAnalysis?.items || [];
+            step("resumed job completes unfinished windows",
+                j2.status === "done" && doneWins.includes(1) && items.some((i) => i.description === "prior"),
+                `status ${j2.status}, doneWindows ${JSON.stringify(doneWins)}, items ${items.length}`);
         } catch (e) {
             if (!quotaSkip("deep-analysis resume", e)) step("resume", false, e.message);
         }
@@ -187,7 +196,8 @@ async function main() {
         results.push(`INFO eval-db storage ${mb} MB; prod db "${prodDbName}" search indexes on chunks: ${prodIdx} (must still be 1 of 3)`);
     } finally {
         if (token) {
-            const del = await request(app).delete("/api/v1/auth/account").set(auth);
+            const del = await request(app).delete("/api/v1/auth/account").set(auth)
+                .send({ password: "AtlasVerify1!" });
             step("throwaway user + data deleted", del.status === 200);
             // verify chunks/files gone
             const left = await File.countDocuments({ originalName: /pages\.pdf|chart\.png|sales\.csv/ });

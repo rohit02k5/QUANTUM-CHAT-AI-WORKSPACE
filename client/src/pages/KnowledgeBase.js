@@ -10,6 +10,8 @@ import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import TableChartIcon from "@mui/icons-material/TableChart";
 import axios from "../axiosConfig";
 import toast from "react-hot-toast";
+import { useNavigate } from "react-router-dom";
+import { ToggleButton, ToggleButtonGroup } from "@mui/material";
 import { motion } from "framer-motion";
 import AudioPlayerModal from "../components/AudioPlayerModal";
 import PdfViewerModal from "../components/PdfViewerModal";
@@ -32,7 +34,9 @@ const STAGE_LABELS = {
 
 const KnowledgeBase = () => {
     const theme = useTheme();
+    const navigate = useNavigate();
     const [searchTerm, setSearchTerm] = useState("");
+    const [searchMode, setSearchMode] = useState("smart"); // "smart" | "exact"
     const [results, setResults] = useState([]);
     const [mediaItems, setMediaItems] = useState([]);
     const [stats, setStats] = useState({ chats: 0, files: 0 });
@@ -206,21 +210,74 @@ const KnowledgeBase = () => {
         }
     };
 
-    const handleSearch = async (e) => {
-        setSearchTerm(e.target.value);
-        if (e.target.value.length > 2) {
-            try {
-                const { data } = await axios.get(`/api/v1/search?query=${e.target.value}`);
-                const mixedResults = [
-                    ...(data.files || []).map(f => ({ ...f, type: 'file' })),
-                    ...(data.chats || []).map(c => ({ ...c, type: 'chat' }))
-                ];
-                setResults(mixedResults);
-            } catch (err) {
-                console.error(err);
-            }
-        } else {
-            setResults([]);
+    const searchDebounce = useRef(null);
+    const runSearch = async (term, mode) => {
+        if (term.length <= 2) { setResults([]); return; }
+        try {
+            const { data } = await axios.get(`/api/v1/search?query=${encodeURIComponent(term)}&mode=${mode}`);
+            setResults([
+                ...(data.files || []).map((f) => ({ ...f, type: "file" })),
+                ...(data.chats || []).map((c) => ({ ...c, type: "chat" })),
+            ]);
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
+    const handleSearch = (e) => {
+        const v = e.target.value;
+        setSearchTerm(v);
+        clearTimeout(searchDebounce.current);
+        searchDebounce.current = setTimeout(() => runSearch(v, searchMode), 350);
+    };
+
+    const handleModeChange = (_, mode) => {
+        if (!mode) return;
+        setSearchMode(mode);
+        clearTimeout(searchDebounce.current);
+        runSearch(searchTerm, mode);
+    };
+
+    // Highlight matched query terms inside snippets (exact mode + keyword hits)
+    const highlight = (text) => {
+        if (!text) return "";
+        const terms = searchTerm.split(/\s+/).filter((t) => t.length > 2);
+        if (!terms.length || searchMode !== "exact") return text;
+        const re = new RegExp(`(${terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "gi");
+        const parts = text.split(re);
+        return parts.map((p, i) =>
+            re.test(p) ? <mark key={i} style={{ background: theme.palette.warning.dark, borderRadius: 2 }}>{p}</mark> : p
+        );
+    };
+
+    // Click-through: chats open in the Chat page; files open the right viewer
+    // at the cited page/timestamp.
+    const openResult = async (item) => {
+        if (item.type === "chat") {
+            navigate("/chat", { state: { chatId: item.id || item._id } });
+            return;
+        }
+        const fid = item.id || item._id;
+        const file = mediaItems.find((m) => m.id === fid) || {};
+        if (item.startSec != null || file.type === "audio") {
+            setPlayer({ open: true, fileId: fid, fileName: item.name || file.name, seekSec: item.startSec ?? null });
+            return;
+        }
+        if (item.page != null || (file.mimetype || "") === "application/pdf") {
+            setPdfView({ fileId: fid, page: item.page || 1, name: item.name || file.name });
+            return;
+        }
+        if (file.type === "image") {
+            setImageView({ fileId: fid, name: item.name || file.name });
+            return;
+        }
+        try {
+            const { data } = await axios.get(`/api/v1/files/${fid}/view`, { responseType: "blob" });
+            const url = URL.createObjectURL(data);
+            window.open(url, "_blank");
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+        } catch {
+            toast.error("Could not open file");
         }
     };
 
@@ -253,17 +310,29 @@ const KnowledgeBase = () => {
             </Grid>
 
             {/* Search */}
-            <TextField
-                fullWidth
-                placeholder="Search across your entire workspace..."
-                value={searchTerm}
-                onChange={handleSearch}
-                InputProps={{
-                    startAdornment: <InputAdornment position="start"><SearchIcon color="primary" /></InputAdornment>,
-                    sx: { borderRadius: "12px", bgcolor: theme.palette.background?.glass || "rgba(255,255,255,0.1)", backdropFilter: "blur(10px)" }
-                }}
-                sx={{ mb: 4 }}
-            />
+            <Box sx={{ display: "flex", gap: 2, mb: 4, alignItems: "center", flexWrap: "wrap" }}>
+                <TextField
+                    fullWidth
+                    placeholder={searchMode === "smart" ? "Semantic search — ask naturally..." : "Exact text search..."}
+                    value={searchTerm}
+                    onChange={handleSearch}
+                    InputProps={{
+                        startAdornment: <InputAdornment position="start"><SearchIcon color="primary" /></InputAdornment>,
+                        sx: { borderRadius: "12px", bgcolor: theme.palette.background?.glass || "rgba(255,255,255,0.1)", backdropFilter: "blur(10px)" }
+                    }}
+                    sx={{ flex: 1, minWidth: 260 }}
+                />
+                <ToggleButtonGroup
+                    value={searchMode}
+                    exclusive
+                    onChange={handleModeChange}
+                    size="small"
+                    sx={{ height: 40 }}
+                >
+                    <ToggleButton value="smart">Smart</ToggleButton>
+                    <ToggleButton value="exact">Exact</ToggleButton>
+                </ToggleButtonGroup>
+            </Box>
 
             {/* Search Results */}
             {results.length > 0 && (
@@ -272,13 +341,25 @@ const KnowledgeBase = () => {
                     <Grid container spacing={2}>
                         {results.map((item, i) => (
                             <Grid item xs={12} key={i}>
-                                <Paper sx={{ p: 2, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                                    <Box display="flex" alignItems="center">
-                                        {item.type === 'chat' ? <SearchIcon color="secondary" sx={{ mr: 2 }} /> : <DescriptionIcon color="action" sx={{ mr: 2 }} />}
-                                        <Box>
-                                            <Typography fontWeight="bold">{item.title || item.originalName}</Typography>
+                                <Paper
+                                    onClick={() => openResult(item)}
+                                    sx={{ p: 2, display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", "&:hover": { bgcolor: theme.palette.action.hover } }}
+                                >
+                                    <Box display="flex" alignItems="center" sx={{ minWidth: 0 }}>
+                                        {item.type === 'chat' ? <SearchIcon color="secondary" sx={{ mr: 2, flexShrink: 0 }} /> : <DescriptionIcon color="action" sx={{ mr: 2, flexShrink: 0 }} />}
+                                        <Box sx={{ minWidth: 0 }}>
+                                            <Typography fontWeight="bold" noWrap>{item.title || item.name || item.originalName}</Typography>
+                                            <Typography variant="body2" color="text.secondary" sx={{
+                                                overflow: "hidden", display: "-webkit-box",
+                                                WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+                                            }}>
+                                                {highlight(item.snippet || item.description || "")}
+                                            </Typography>
                                             <Typography variant="caption" color="text.secondary">
-                                                {item.type === 'chat' ? "Conversation" : "Document"} • {new Date(item.createdAt || item.uploadDate).toLocaleDateString()}
+                                                {item.type === 'chat' ? "Conversation" : "Document"}
+                                                {item.page != null && ` • p.${item.page}`}
+                                                {item.startSec != null && ` • ${Math.floor(item.startSec / 60)}:${String(Math.floor(item.startSec % 60)).padStart(2, "0")}`}
+                                                {item.matchType && ` • matched by ${item.matchType}`}
                                             </Typography>
                                         </Box>
                                     </Box>
@@ -287,6 +368,7 @@ const KnowledgeBase = () => {
                                         size="small"
                                         color={item.type === 'chat' ? "secondary" : "primary"}
                                         variant="outlined"
+                                        sx={{ ml: 2, flexShrink: 0 }}
                                     />
                                 </Paper>
                             </Grid>

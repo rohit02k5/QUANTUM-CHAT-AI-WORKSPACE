@@ -27,7 +27,7 @@ describe("retriever (cosine fallback on non-Atlas Mongo)", () => {
                 text, pageContent: text,
                 metadata: { chunkIndex: i },
                 embedding: await mock.embed(text),
-                embeddingDims: 768, embeddingModel: "mock",
+                embeddingDims: 768, embeddingModel: process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2",
             });
         }
     });

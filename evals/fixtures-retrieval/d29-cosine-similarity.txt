@@ -1,0 +1,1 @@
+Cosine similarity measures the angle between two vectors: 1 means identical direction, 0 means orthogonal, -1 means opposite. For retrieval it is robust to document length, unlike raw dot product which favours longer text.

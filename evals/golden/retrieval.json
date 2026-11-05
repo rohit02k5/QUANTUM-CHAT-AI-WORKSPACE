@@ -1,0 +1,540 @@
+[
+  {
+    "id": "para-01",
+    "category": "paraphrase",
+    "query": "How fast does something need to travel to circle the Earth without falling?",
+    "gold": [
+      {
+        "f": "d01-orbital-basics.txt",
+        "m": "7.7 km/s"
+      }
+    ]
+  },
+  {
+    "id": "para-02",
+    "category": "paraphrase",
+    "query": "Minimum speed needed to leave Earth's gravity for good",
+    "gold": [
+      {
+        "f": "d02-escape-velocity.txt",
+        "m": "11.2 km/s"
+      }
+    ]
+  },
+  {
+    "id": "para-03",
+    "category": "paraphrase",
+    "query": "What's the most economical way to move a satellite between two orbits?",
+    "gold": [
+      {
+        "f": "d03-hohmann-transfer.txt",
+        "m": "most fuel-efficient"
+      }
+    ]
+  },
+  {
+    "id": "para-04",
+    "category": "paraphrase",
+    "query": "Why does home-baked bread with a starter take so much longer than bread from a packet of yeast?",
+    "gold": [
+      {
+        "f": "d06-yeast-vs-starter.txt",
+        "m": "1 to 2 hours"
+      }
+    ]
+  },
+  {
+    "id": "para-05",
+    "category": "paraphrase",
+    "query": "Which chess computer beat a reigning world champion and when?",
+    "gold": [
+      {
+        "f": "d09-kasparov-deepblue.txt",
+        "m": "Deep Blue"
+      }
+    ]
+  },
+  {
+    "id": "para-06",
+    "category": "paraphrase",
+    "query": "In Kubernetes, where do applications point when they need an address that survives restarts?",
+    "gold": [
+      {
+        "f": "d10-k8s-pods.txt",
+        "m": "stable virtual IP"
+      }
+    ]
+  },
+  {
+    "id": "para-07",
+    "category": "paraphrase",
+    "query": "The stone basin guests use to wash before a Japanese tea ceremony — what is it for?",
+    "gold": [
+      {
+        "f": "d13-tsukubai.txt",
+        "m": "ritual act of purification"
+      }
+    ]
+  },
+  {
+    "id": "para-08",
+    "category": "paraphrase",
+    "query": "How do plants turn sunlight into food energy?",
+    "gold": [
+      {
+        "f": "d16-photosynthesis.txt",
+        "m": "Calvin cycle"
+      }
+    ]
+  },
+  {
+    "id": "para-09",
+    "category": "paraphrase",
+    "query": "Which river system moves the most water on the planet?",
+    "gold": [
+      {
+        "f": "d35-amazon-basin.txt",
+        "m": "209,000 cubic metres"
+      }
+    ]
+  },
+  {
+    "id": "para-10",
+    "category": "paraphrase",
+    "query": "How do you keep per-row detail while adding a per-group average in a dataframe?",
+    "gold": [
+      {
+        "f": "d39-pandas.txt",
+        "m": "transform"
+      }
+    ]
+  },
+  {
+    "id": "id-01",
+    "category": "exact-identifier",
+    "query": "What does ERR-ING-4471 mean and how do I fix it?",
+    "gold": [
+      {
+        "f": "d18-err-sku-1.txt",
+        "m": "ERR-ING-4471"
+      }
+    ]
+  },
+  {
+    "id": "id-02",
+    "category": "exact-identifier",
+    "query": "ERR-AUTH-2290 keeps showing up on login",
+    "gold": [
+      {
+        "f": "d19-err-sku-2.txt",
+        "m": "ERR-AUTH-2290"
+      }
+    ]
+  },
+  {
+    "id": "id-03",
+    "category": "exact-identifier",
+    "query": "How much is SKU-QW-PRO-2025 per seat?",
+    "gold": [
+      {
+        "f": "d20-sku-pricing.txt",
+        "m": "SKU-QW-PRO-2025"
+      }
+    ]
+  },
+  {
+    "id": "id-04",
+    "category": "exact-identifier",
+    "query": "I need the power brick part number, I think it's HW-PWR-65C",
+    "gold": [
+      {
+        "f": "d21-sku-hardware.txt",
+        "m": "HW-PWR-65C"
+      }
+    ]
+  },
+  {
+    "id": "id-05",
+    "category": "exact-identifier",
+    "query": "What's the rate limit before the API sends 429?",
+    "gold": [
+      {
+        "f": "d22-api-rate-429.txt",
+        "m": "60 requests per minute"
+      }
+    ]
+  },
+  {
+    "id": "id-06",
+    "category": "exact-identifier",
+    "query": "When is the offset parameter being removed — v4.0?",
+    "gold": [
+      {
+        "f": "d23-api-versioning.txt",
+        "m": "v4.0"
+      }
+    ]
+  },
+  {
+    "id": "id-07",
+    "category": "exact-identifier",
+    "query": "npm command to install quantum-cli 4.1.7",
+    "gold": [
+      {
+        "f": "d24-release-4-1-7.txt",
+        "m": "quantum-cli@4.1.7"
+      }
+    ]
+  },
+  {
+    "id": "id-08",
+    "category": "exact-identifier",
+    "query": "How many dimensions does the embedding model produce?",
+    "gold": [
+      {
+        "f": "d28-embedding-dims.txt",
+        "m": "768-dimensional"
+      }
+    ]
+  },
+  {
+    "id": "multi-01",
+    "category": "multi-document",
+    "query": "Compare the orbital speeds of a low Earth orbit satellite and a geostationary one",
+    "gold": [
+      {
+        "f": "d01-orbital-basics.txt",
+        "m": "3.07 km/s"
+      },
+      {
+        "f": "d02-escape-velocity.txt",
+        "m": "11.2 km/s"
+      }
+    ]
+  },
+  {
+    "id": "multi-02",
+    "category": "multi-document",
+    "query": "What hydration and what fermentation schedule should I use for a 500g flour loaf?",
+    "gold": [
+      {
+        "f": "d04-sourdough-hydration.txt",
+        "m": "375 g of water"
+      },
+      {
+        "f": "d05-sourdough-schedule.txt",
+        "m": "4 hours at 24"
+      }
+    ]
+  },
+  {
+    "id": "multi-03",
+    "category": "multi-document",
+    "query": "How does GROUP BY in SQL differ from groupby in pandas when you want the aggregate back on each row?",
+    "gold": [
+      {
+        "f": "d40-sql-groupby.txt",
+        "m": "OVER (PARTITION BY"
+      },
+      {
+        "f": "d39-pandas.txt",
+        "m": "transform"
+      }
+    ]
+  },
+  {
+    "id": "multi-04",
+    "category": "multi-document",
+    "query": "Which is longer, the Nile or the Amazon, and which carries more water?",
+    "gold": [
+      {
+        "f": "d36-nile-vs-amazon.txt",
+        "m": "6,650 km"
+      },
+      {
+        "f": "d35-amazon-basin.txt",
+        "m": "209,000 cubic metres"
+      }
+    ]
+  },
+  {
+    "id": "multi-05",
+    "category": "multi-document",
+    "query": "When did the French and American revolutions each end?",
+    "gold": [
+      {
+        "f": "d37-french-revolution.txt",
+        "m": "1793"
+      },
+      {
+        "f": "d38-american-revolution.txt",
+        "m": "Treaty of Paris"
+      }
+    ]
+  },
+  {
+    "id": "multi-06",
+    "category": "multi-document",
+    "query": "How does a qubit differ from a classical bit and what does entanglement add?",
+    "gold": [
+      {
+        "f": "d33-quantum-qubit.txt",
+        "m": "superposition"
+      },
+      {
+        "f": "d34-quantum-entangle.txt",
+        "m": "Bell pair"
+      }
+    ]
+  },
+  {
+    "id": "multi-07",
+    "category": "multi-document",
+    "query": "What do vector search and keyword search each miss that the other catches?",
+    "gold": [
+      {
+        "f": "d31-vector-vs-keyword.txt",
+        "m": "error codes"
+      },
+      {
+        "f": "d29-cosine-similarity.txt",
+        "m": "cosine"
+      }
+    ]
+  },
+  {
+    "id": "multi-08",
+    "category": "multi-document",
+    "query": "After bulk fermentation at 24 C, how long is the cold proof?",
+    "gold": [
+      {
+        "f": "d05-sourdough-schedule.txt",
+        "m": "12 hour cold proof"
+      },
+      {
+        "f": "d04-sourdough-hydration.txt",
+        "m": "hydration"
+      }
+    ]
+  },
+  {
+    "id": "dup-01",
+    "category": "near-duplicate",
+    "query": "Which release fixed the PDF renderer memory leak?",
+    "gold": [
+      {
+        "f": "d24-release-4-1-7.txt",
+        "m": "memory leak"
+      }
+    ]
+  },
+  {
+    "id": "dup-02",
+    "category": "near-duplicate",
+    "query": "Which release should not go to production?",
+    "gold": [
+      {
+        "f": "d25-release-4-1-6.txt",
+        "m": "superseded"
+      }
+    ]
+  },
+  {
+    "id": "dup-03",
+    "category": "near-duplicate",
+    "query": "How fast is a circular orbit at 300 km versus escape velocity at the surface?",
+    "gold": [
+      {
+        "f": "d01-orbital-basics.txt",
+        "m": "7.7 km/s"
+      }
+    ]
+  },
+  {
+    "id": "dup-04",
+    "category": "near-duplicate",
+    "query": "What's the hydration percentage in the basic sourdough recipe?",
+    "gold": [
+      {
+        "f": "d04-sourdough-hydration.txt",
+        "m": "75% hydration"
+      }
+    ]
+  },
+  {
+    "id": "dup-05",
+    "category": "near-duplicate",
+    "query": "How long does bulk fermentation take at 24 C?",
+    "gold": [
+      {
+        "f": "d05-sourdough-schedule.txt",
+        "m": "4 hours at 24"
+      }
+    ]
+  },
+  {
+    "id": "dup-06",
+    "category": "near-duplicate",
+    "query": "Which revolution included the Reign of Terror?",
+    "gold": [
+      {
+        "f": "d37-french-revolution.txt",
+        "m": "Reign of Terror"
+      }
+    ]
+  },
+  {
+    "id": "dup-07",
+    "category": "near-duplicate",
+    "query": "Who won the 1972 chess championship and what was the score?",
+    "gold": [
+      {
+        "f": "d07-fischer-spassky.txt",
+        "m": "12.5 to 8.5"
+      }
+    ]
+  },
+  {
+    "id": "dup-08",
+    "category": "near-duplicate",
+    "query": "What opening move sequence defines the Queen's Gambit?",
+    "gold": [
+      {
+        "f": "d08-queens-gambit.txt",
+        "m": "1.d4 d5 2.c4"
+      }
+    ]
+  },
+  {
+    "id": "fu-01",
+    "category": "follow-up",
+    "query": "How long does it take?",
+    "gold": [
+      {
+        "f": "d03-hohmann-transfer.txt",
+        "m": "two engine burns"
+      }
+    ],
+    "history": [
+      {
+        "role": "user",
+        "content": "Tell me about Hohmann transfers"
+      },
+      {
+        "role": "model",
+        "content": "A Hohmann transfer uses two burns to move between circular orbits."
+      }
+    ],
+    "standaloneQuery": "How long does a Hohmann transfer take?"
+  },
+  {
+    "id": "fu-02",
+    "category": "follow-up",
+    "query": "What temperature should I use for that?",
+    "gold": [
+      {
+        "f": "d05-sourdough-schedule.txt",
+        "m": "4 hours at 24"
+      }
+    ],
+    "history": [
+      {
+        "role": "user",
+        "content": "Explain sourdough bulk fermentation"
+      },
+      {
+        "role": "model",
+        "content": "Bulk fermentation develops the dough after mixing."
+      }
+    ],
+    "standaloneQuery": "What temperature should sourdough bulk fermentation use?"
+  },
+  {
+    "id": "fu-03",
+    "category": "follow-up",
+    "query": "And what was its score?",
+    "gold": [
+      {
+        "f": "d07-fischer-spassky.txt",
+        "m": "12.5 to 8.5"
+      }
+    ],
+    "history": [
+      {
+        "role": "user",
+        "content": "Who won the 1972 chess world championship?"
+      },
+      {
+        "role": "model",
+        "content": "Bobby Fischer beat Boris Spassky in Reykjavik."
+      }
+    ],
+    "standaloneQuery": "What was Fischer's score against Spassky in 1972?"
+  },
+  {
+    "id": "fu-04",
+    "category": "follow-up",
+    "query": "How do I make it scale automatically?",
+    "gold": [
+      {
+        "f": "d11-k8s-deployments.txt",
+        "m": "ReplicaSet"
+      }
+    ],
+    "history": [
+      {
+        "role": "user",
+        "content": "What does a Kubernetes Deployment do?"
+      },
+      {
+        "role": "model",
+        "content": "It manages a ReplicaSet of Pods with declarative rolling updates."
+      }
+    ],
+    "standaloneQuery": "How do I scale a Kubernetes Deployment automatically?"
+  },
+  {
+    "id": "fu-05",
+    "category": "follow-up",
+    "query": "Where is it located?",
+    "gold": [
+      {
+        "f": "d13-tsukubai.txt",
+        "m": "entrance of a Japanese tea garden"
+      }
+    ],
+    "history": [
+      {
+        "role": "user",
+        "content": "What is the tsukubai in a tea garden?"
+      },
+      {
+        "role": "model",
+        "content": "A low stone water basin used for ritual purification."
+      }
+    ],
+    "standaloneQuery": "Where is the tsukubai located in a tea garden?"
+  },
+  {
+    "id": "fu-06",
+    "category": "follow-up",
+    "query": "How many positions could it evaluate?",
+    "gold": [
+      {
+        "f": "d09-kasparov-deepblue.txt",
+        "m": "200 million positions"
+      }
+    ],
+    "history": [
+      {
+        "role": "user",
+        "content": "Tell me about Deep Blue vs Kasparov"
+      },
+      {
+        "role": "model",
+        "content": "Deep Blue beat Kasparov in their 1997 rematch."
+      }
+    ],
+    "standaloneQuery": "How many positions per second could Deep Blue evaluate?"
+  }
+]

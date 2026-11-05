@@ -1,6 +1,9 @@
 const { GoogleGenAI } = require("@google/genai");
 const dotenv = require("dotenv");
 const mongoose = require("mongoose");
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
 const logger = require("./logger");
 const { getRequestId, getUserId } = require("./requestContext");
 dotenv.config();
@@ -34,6 +37,56 @@ function recordUsage({ kind, model, latencyMs, ok, usageMetadata, errorCode }) {
     }
 }
 
+/**
+ * Classify a Gemini/API error so callers can behave correctly:
+ *   - "daily-quota"   — the project's per-DAY generate quota is out (429 whose
+ *                       quotaId/message mentions per-day). Retry within the
+ *                       same hour is pointless: surface a friendly error or
+ *                       requeue work with a delay. Stable code AI_QUOTA_EXHAUSTED.
+ *   - "rate-limit"    — per-minute rate limit (429 without daily markers).
+ *                       Backoff + retry is appropriate. Code AI_RATE_LIMITED.
+ *   - "server"        — 5xx / Overloaded, transient. Code AI_UNAVAILABLE.
+ *   - "model-missing" — 404. Code AI_MODEL_MISSING.
+ *   - "other"         — anything else. Code AI_ERROR.
+ * retryAfterMs is parsed from RetryInfo details or "Please retry in Xh Ym Zs"
+ * when the API provides it.
+ */
+function classifyError(error) {
+    const msg = String(error?.message || error || "");
+    const status = error?.status ?? error?.error?.code;
+    let retryAfterMs;
+    const details = error?.error?.details || error?.details || [];
+    const retryInfo = Array.isArray(details)
+        ? details.find((d) => /RetryInfo/i.test(d?.["@type"] || ""))
+        : null;
+    const rd = retryInfo?.retryDelay || "";
+    const rdMatch = String(rd).match(/([\d.]+)\s*s/);
+    if (rdMatch) retryAfterMs = Math.round(parseFloat(rdMatch[1]) * 1000);
+    const msgRetry = msg.match(/retry in\s+(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:([\d.]+)\s*s)?/i);
+    if (retryAfterMs == null && msgRetry && (msgRetry[1] || msgRetry[2] || msgRetry[3])) {
+        retryAfterMs = Math.round(
+            ((+msgRetry[1] || 0) * 3600 + (+msgRetry[2] || 0) * 60 + (+msgRetry[3] || 0)) * 1000
+        );
+    }
+    const isQuota = status === 429 || /RESOURCE_EXHAUSTED|quota exceeded/i.test(msg);
+    if (isQuota) {
+        const daily = /per.?day|PerDay|daily|GenerateRequestsPerDay/i.test(msg);
+        return {
+            kind: daily ? "daily-quota" : "rate-limit",
+            code: daily ? "AI_QUOTA_EXHAUSTED" : "AI_RATE_LIMITED",
+            retryAfterMs,
+            status,
+        };
+    }
+    if ((status >= 500 && status < 600) || /Overloaded/i.test(msg)) {
+        return { kind: "server", code: "AI_UNAVAILABLE", retryAfterMs, status };
+    }
+    if (status === 404 || /not found/i.test(msg)) {
+        return { kind: "model-missing", code: "AI_MODEL_MISSING", retryAfterMs, status };
+    }
+    return { kind: "other", code: "AI_ERROR", retryAfterMs, status };
+}
+
 /** L2-normalize a vector in place-safe fashion. */
 function l2Normalize(values) {
     let norm = 0;
@@ -58,6 +111,42 @@ class GeminiHelper {
         this.transcribeModelName = process.env.GEMINI_TRANSCRIBE_MODEL || this.modelName;
         this.transcribeModelFallback = false;
         this._mock = process.env.GEMINI_MOCK === "1" ? require("./geminiMock") : null;
+        // API-call counters for cost reporting (evals). Cache hits skip the
+        // counter — a rerun of unchanged fixtures is free.
+        this.calls = { embed: 0, generate: 0 };
+        this.calls.embedCached = 0;
+    }
+
+    /**
+     * On-disk embedding cache — opt-in via EMBED_CACHE_DIR (evals only; prod
+     * code paths leave it unset). Keyed by sha256(text + model + dims + taskType)
+     * so a model/dims change never serves stale vectors.
+     */
+    _embedCache() {
+        const dir = process.env.EMBED_CACHE_DIR;
+        if (!dir) return null;
+        return {
+            read(text, taskType) {
+                const key = crypto
+                    .createHash("sha256")
+                    .update(`${text}|${this._model}|${this._dims}|${taskType}`)
+                    .digest("hex");
+                const fp = path.join(dir, `${key}.json`);
+                try { return JSON.parse(fs.readFileSync(fp, "utf8")); } catch { return null; }
+            },
+            write(text, taskType, values) {
+                const key = crypto
+                    .createHash("sha256")
+                    .update(`${text}|${this._model}|${this._dims}|${taskType}`)
+                    .digest("hex");
+                try {
+                    fs.mkdirSync(dir, { recursive: true });
+                    fs.writeFileSync(path.join(dir, `${key}.json`), JSON.stringify(values));
+                } catch { /* cache is best-effort */ }
+            },
+            _model: this.embeddingModel,
+            _dims: EMBEDDING_DIMS,
+        };
     }
 
     /**
@@ -70,7 +159,13 @@ class GeminiHelper {
         const start = Date.now();
         if (this._mock) return this._mock.embed(text);
         const taskType = task === "query" ? "RETRIEVAL_QUERY" : "RETRIEVAL_DOCUMENT";
+        const cache = this._embedCache();
+        if (cache) {
+            const hit = cache.read(text, taskType);
+            if (hit) { this.calls.embedCached++; return hit; }
+        }
         try {
+            this.calls.embed++;
             const result = await this.ai.models.embedContent({
                 model: this.embeddingModel,
                 contents: text,
@@ -78,9 +173,11 @@ class GeminiHelper {
             });
             recordUsage({ kind: "embed", model: this.embeddingModel, latencyMs: Date.now() - start, ok: true });
             const values = result.embeddings[0].values;
-            return l2Normalize(values);
+            const vec = l2Normalize(values);
+            if (cache) cache.write(text, taskType, vec);
+            return vec;
         } catch (error) {
-            recordUsage({ kind: "embed", model: this.embeddingModel, latencyMs: Date.now() - start, ok: false, errorCode: error.status || error.message });
+            recordUsage({ kind: "embed", model: this.embeddingModel, latencyMs: Date.now() - start, ok: false, errorCode: classifyError(error).code });
             logger.error({ err: error.message }, "[GeminiHelper] Embedding Error");
             throw error;
         }
@@ -104,6 +201,7 @@ class GeminiHelper {
                 if (signal?.aborted) throw new Error("aborted");
                 const start = Date.now();
                 try {
+                    this.calls.generate++;
                     const result = await this.ai.models.generateContent({
                         model,
                         contents: prompt,
@@ -113,7 +211,14 @@ class GeminiHelper {
                     return result;
                 } catch (error) {
                     lastError = error;
-                    recordUsage({ kind, model, latencyMs: Date.now() - start, ok: false, errorCode: error.status || error.message });
+                    const cls = classifyError(error);
+                    recordUsage({ kind, model, latencyMs: Date.now() - start, ok: false, errorCode: cls.code });
+                    // Daily quota exhausted on this model — retrying it is
+                    // pointless; move straight to the next fallback model.
+                    if (cls.kind === "daily-quota") {
+                        logger.warn({ model }, "[GeminiHelper] daily quota exhausted on model, trying next");
+                        break;
+                    }
                     const isTransient =
                         error.status === 503 ||
                         error.status === 429 ||
@@ -150,6 +255,7 @@ class GeminiHelper {
         for (const model of models) {
             if (signal?.aborted) break;
             try {
+                this.calls.generate++;
                 const stream = await this.ai.models.generateContentStream({
                     model,
                     contents: prompt,
@@ -167,13 +273,13 @@ class GeminiHelper {
                         }
                         recordUsage({ kind, model, latencyMs: Date.now() - start, ok: true });
                     } catch (error) {
-                        recordUsage({ kind, model, latencyMs: Date.now() - start, ok: false, errorCode: error.status || error.message });
+                        recordUsage({ kind, model, latencyMs: Date.now() - start, ok: false, errorCode: classifyError(error).code });
                         throw error;
                     }
                 })();
             } catch (error) {
                 lastError = error;
-                recordUsage({ kind, model, latencyMs: Date.now() - start, ok: false, errorCode: error.status || error.message });
+                recordUsage({ kind, model, latencyMs: Date.now() - start, ok: false, errorCode: classifyError(error).code });
                 logger.warn({ model, status: error.status, err: error.message }, "[GeminiHelper] stream failed to start, trying next model");
             }
         }
@@ -204,6 +310,7 @@ class GeminiHelper {
         const model = this.fallbackModels[this.fallbackModels.length - 1] || this.modelName;
         const start = Date.now();
         try {
+            this.calls.generate++;
             const result = await this.ai.models.generateContent({
                 model,
                 contents: prompt,
@@ -212,7 +319,7 @@ class GeminiHelper {
             recordUsage({ kind, model, latencyMs: Date.now() - start, ok: true, usageMetadata: result.usageMetadata });
             return result;
         } catch (error) {
-            recordUsage({ kind, model, latencyMs: Date.now() - start, ok: false, errorCode: error.status || error.message });
+            recordUsage({ kind, model, latencyMs: Date.now() - start, ok: false, errorCode: classifyError(error).code });
             throw error;
         }
     }
@@ -386,7 +493,7 @@ class GeminiHelper {
                     });
                     recordUsage({ kind: "transcribe", model: this.transcribeModelName, latencyMs: Date.now() - start, ok: true, usageMetadata: result.usageMetadata });
                 } catch (e) {
-                    recordUsage({ kind: "transcribe", model: this.transcribeModelName, latencyMs: Date.now() - start, ok: false, errorCode: e.status || e.message });
+                    recordUsage({ kind: "transcribe", model: this.transcribeModelName, latencyMs: Date.now() - start, ok: false, errorCode: classifyError(e).code });
                     logger.warn({ model: this.transcribeModelName, err: e.message }, "[GeminiHelper] transcribe model failed — falling back");
                     result = await this.generateContentWithRetry(contents, config, 2, "transcribe", signal);
                 }
@@ -585,5 +692,7 @@ class GeminiHelper {
     }
 }
 
-module.exports = new GeminiHelper();
+const _instance = new GeminiHelper();
+module.exports = _instance;
 module.exports.EMBEDDING_DIMS = EMBEDDING_DIMS;
+module.exports.classifyError = classifyError;

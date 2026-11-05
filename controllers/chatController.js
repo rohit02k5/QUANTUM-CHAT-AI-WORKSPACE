@@ -51,12 +51,20 @@ function buildHistory(chat) {
 async function prepareMessageContext(userId, chat, message, { useDocuments, documentIds, fileId }) {
     let prompt = message;
     let sources = [];
+    let rewrittenQuery;
 
     const hasDocs = useDocuments !== false && (await Chunk.exists({ user: userId }));
     if (hasDocs) {
         try {
             const scopedIds = Array.isArray(documentIds) ? documentIds : [];
-            const chunks = await retrieveChunks(userId, message, RAG_TOP_K, scopedIds);
+            // RAG_REWRITE: condense context-dependent follow-ups for retrieval
+            // ONLY — the stored user message stays verbatim.
+            const rw = await require("../utils/queryRewrite").maybeRewriteQuery(
+                message,
+                chat.messages.slice(0, -1).slice(-4)
+            );
+            if (rw.rewritten) rewrittenQuery = rw.query;
+            const chunks = await retrieveChunks(userId, rw.query, RAG_TOP_K, scopedIds);
             if (chunks.length > 0) {
                 const { context, flags } = guard.wrapSources(chunks);
                 prompt = guard.buildRagPrompt(message, context);
@@ -67,6 +75,7 @@ async function prepareMessageContext(userId, chat, message, { useDocuments, docu
                     page: c.metadata?.page,
                     startSec: c.metadata?.startSec,
                     score: c.score,
+                    matchedBy: c.matchedBy,
                     snippet: (c.text || "").substring(0, 200),
                     flagged: flags[i] || undefined,
                 }));
@@ -97,7 +106,7 @@ async function prepareMessageContext(userId, chat, message, { useDocuments, docu
 
     const personaPrompt = await resolvePersonaPrompt(chat);
     const systemInstruction = guard.buildSystemInstruction({ personaPrompt });
-    return { prompt, sources, tempFileDoc, systemInstruction };
+    return { prompt, sources, tempFileDoc, systemInstruction, rewrittenQuery };
 }
 
 /** Fire-and-forget title generation on the cheapest model. Never blocks. */
@@ -180,7 +189,7 @@ exports.sendMessage = async (req, res) => {
         // Add user message to DB
         chat.messages.push({ role: "user", content: message });
 
-        const { prompt, sources, tempFileDoc, systemInstruction } =
+        const { prompt, sources, tempFileDoc, systemInstruction, rewrittenQuery } =
             await prepareMessageContext(userId, chat, message, { useDocuments, documentIds, fileId });
 
         const history = buildHistory(chat);
@@ -191,15 +200,30 @@ exports.sendMessage = async (req, res) => {
             role: "model",
             content: responseText,
             sources: sources.length ? sources : undefined,
+            rewrittenQuery,
         });
 
         await chat.save();
         if (isNewChat) autoTitle(chat);
-        res.status(200).json({ response: responseText, chatId: chat._id, chat, sources: sources.length ? sources : undefined });
+        require("../utils/chatSummary").maybeSummarizeChat(chat._id).catch((e) =>
+            logger.warn({ err: e.message }, "[Chat] summary refresh failed"));
+        res.status(200).json({
+            response: responseText, chatId: chat._id, chat,
+            sources: sources.length ? sources : undefined,
+            rewrittenQuery,
+        });
 
         // Temp attachments are single-use: drop the record + disk file afterwards
         if (tempFileDoc) removeFileArtifacts(tempFileDoc);
     } catch (err) {
+        const cls = require("../utils/geminiHelper").classifyError(err);
+        if (cls.kind === "daily-quota") {
+            return res.status(429).json({
+                message: "The daily AI quota has been reached — please try again later.",
+                code: cls.code,
+                retryAfterMs: cls.retryAfterMs,
+            });
+        }
         logger.error({ err: err.message }, "CHAT_ERROR_DETAILS");
         res.status(500).json({
             message: "Chat Error",
@@ -215,6 +239,7 @@ exports.streamMessage = async (req, res) => {
     const userId = req.user._id;
     let chat = null;
     let sources = [];
+    let rewrittenQuery;
     let finished = false;
     let aborted = false;
     let accumulated = "";
@@ -261,8 +286,11 @@ exports.streamMessage = async (req, res) => {
                 sources: sources.length ? sources : undefined,
                 trace: agentTrace?.length ? agentTrace : undefined,
                 truncated: !!truncated,
+                rewrittenQuery,
             });
             await chat.save();
+            require("../utils/chatSummary").maybeSummarizeChat(chat._id).catch((e) =>
+                logger.warn({ err: e.message }, "[Chat] summary refresh failed"));
         } catch (e) {
             logger.error({ err: e.message }, "[Chat][stream] failed to persist assistant message");
         }
@@ -306,6 +334,7 @@ exports.streamMessage = async (req, res) => {
             fileId,
         });
         sources = ctx.sources;
+        rewrittenQuery = ctx.rewrittenQuery;
         await chat.save(); // persist user turn before streaming starts
 
         // --- SSE begins ---
@@ -315,7 +344,7 @@ exports.streamMessage = async (req, res) => {
             if (!res.writableEnded) res.write(": ping\n\n");
         }, 15000);
 
-        sendEvent({ type: "meta", chatId: chat._id, requestId: getRequestId(), sources: sources.length ? sources : undefined });
+        sendEvent({ type: "meta", chatId: chat._id, requestId: getRequestId(), sources: sources.length ? sources : undefined, rewrittenQuery });
 
         // Client disconnect mid-stream: res 'close' fires when the socket is
         // gone (more reliable than req 'close' for aborted responses).
@@ -401,8 +430,23 @@ exports.streamMessage = async (req, res) => {
         if (ctx.tempFileDoc) removeFileArtifacts(ctx.tempFileDoc);
     } catch (err) {
         cleanup();
-        logger.error({ err: err.message }, "[Chat][stream] error");
+        const cls = require("../utils/geminiHelper").classifyError(err);
+        logger.error({ err: err.message, errorCode: cls.code }, "[Chat][stream] error");
         if (aborted) return; // disconnect path already handled
+        if (cls.kind === "daily-quota") {
+            const payload = {
+                code: cls.code,
+                message: "The daily AI quota has been reached — please try again later.",
+                retryAfterMs: cls.retryAfterMs,
+            };
+            if (res.headersSent && !res.writableEnded) {
+                sendEvent({ type: "error", ...payload });
+                res.end();
+            } else if (!res.headersSent) {
+                res.status(429).json(payload);
+            }
+            return;
+        }
         if (res.headersSent && !res.writableEnded) {
             sendEvent({ type: "error", code: "GEN_FAILED", message: err.message });
             // Persist whatever partial output exists so history stays consistent

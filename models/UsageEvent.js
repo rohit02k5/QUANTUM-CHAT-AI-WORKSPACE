@@ -4,7 +4,7 @@ const usageEventSchema = new mongoose.Schema({
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     kind: {
         type: String,
-        enum: ["chat", "agent", "embed", "transcribe", "vision", "judge", "tool"],
+        enum: ["chat", "agent", "embed", "transcribe", "vision", "judge", "tool", "rerank"],
         required: true,
     },
     model: { type: String },

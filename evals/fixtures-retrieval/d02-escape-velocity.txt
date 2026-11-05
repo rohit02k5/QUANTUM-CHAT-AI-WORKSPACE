@@ -1,0 +1,1 @@
+Escape velocity from Earth's surface is 11.2 km/s — about sqrt(2) times the circular-orbit speed at the same radius. From the Moon it is only 2.4 km/s because of the Moon's smaller mass and radius.

@@ -1,0 +1,1 @@
+A Kubernetes Deployment manages a ReplicaSet of Pods with declarative rolling updates. Changing the container image triggers a gradual rollout; a failing readiness probe pauses the rollout automatically.

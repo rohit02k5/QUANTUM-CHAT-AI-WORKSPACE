@@ -1,0 +1,1 @@
+In pandas, df.groupby('region').agg({'revenue':'mean'}) computes per-group means, while df.groupby('region')['revenue'].transform('mean') keeps the row count and broadcasts each group's mean back to its rows.

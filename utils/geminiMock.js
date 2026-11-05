@@ -72,6 +72,8 @@ let transcriptScript = null; // (window|null) => segments[]
 let imageDescriptionScript = null; // () => {caption,ocrText,dataInsights,tags}
 let deepAnalysisScript = null; // (window?) => [{page,type,description,keyData}]
 let tableSpecScript = null; // (question?) => spec object
+let rewriteScript = null; // (prompt?) => {needsRewrite, standalone}
+let rerankScript = null; // (prompt?) => {order:[i]}
 function __uploadMedia(buffer, mime) {
     const f = { name: `files/mock-${mediaFiles.length + 1}`, uri: `files/mock-${mediaFiles.length + 1}`, mimeType: mime, size: buffer.length, deleted: false };
     mediaFiles.push(f);
@@ -87,6 +89,8 @@ function __setTranscript(fn) { transcriptScript = fn; }
 function __setImageDescription(fn) { imageDescriptionScript = fn; }
 function __setDeepAnalysis(fn) { deepAnalysisScript = fn; }
 function __setTableSpec(fn) { tableSpecScript = fn; }
+function __setRewrite(fn) { rewriteScript = fn; }
+function __setRerank(fn) { rerankScript = fn; }
 
 /** Find media parts + prompt text inside a contents array. */
 function mediaParts(prompt) {
@@ -207,6 +211,26 @@ function generate(prompt, config = {}) {
         });
     }
 
+    // Query-rewrite calls (Phase 4.4) — prompt asks for {needsRewrite, standalone}
+    if (/needsRewrite/i.test(text)) {
+        const r = rewriteScript ? rewriteScript(text) : { needsRewrite: false, standalone: "" };
+        return Promise.resolve({
+            text: JSON.stringify(r),
+            usageMetadata: { promptTokenCount: 30, candidatesTokenCount: 10 },
+        });
+    }
+
+    // LLM rerank calls (Phase 4.3) — prompt asks for {order:[indices]}
+    if (/You are a reranker/i.test(text)) {
+        const nm = text.match(/(\d+) retrieved SOURCE chunks/);
+        const n = nm ? parseInt(nm[1], 10) : 0;
+        const r = rerankScript ? rerankScript(text) : { order: Array.from({ length: n }, (_, i) => i) };
+        return Promise.resolve({
+            text: JSON.stringify(r),
+            usageMetadata: { promptTokenCount: 200, candidatesTokenCount: 20 },
+        });
+    }
+
     // Meeting minutes calls get a schema-shaped structured answer
     if (/meeting minutes/i.test(text)) {
         response = JSON.stringify({
@@ -255,4 +279,6 @@ module.exports = {
     __setImageDescription,
     __setDeepAnalysis,
     __setTableSpec,
+    __setRewrite,
+    __setRerank,
 };

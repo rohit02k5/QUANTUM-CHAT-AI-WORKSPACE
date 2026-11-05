@@ -14,6 +14,7 @@ import Studio from './pages/Studio'; // Import Studio
 import KnowledgeBase from './pages/KnowledgeBase';
 import ExecutiveAssistant from './pages/ExecutiveAssistant';
 import InsightEngine from './pages/InsightEngine';
+import Settings from './pages/Settings';
 import ProtectedRoute from './components/ProtectedRoute';
 
 import ErrorBoundary from './components/ErrorBoundary';
@@ -37,6 +38,7 @@ function App() {
               <Route path='studio' element={<Studio />} />
               <Route path='executive-assistant' element={<ExecutiveAssistant />} />
               <Route path='insight-engine' element={<InsightEngine />} />
+              <Route path='settings' element={<Settings />} />
             </Route>
 
             <Route path="/register" element={<Register />} />

@@ -25,7 +25,7 @@ async function seedDoc(userId, { name = "doc.txt", sim = "seed", text = "SIM:see
     await Chunk.create({
         user: userId, file: file._id, text, pageContent: text,
         metadata: { chunkIndex: 0 },
-        embedding: await mock.embed(text), embeddingDims: 768, embeddingModel: "mock",
+        embedding: await mock.embed(text), embeddingDims: 768, embeddingModel: process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2",
     });
     return file;
 }

@@ -78,6 +78,18 @@ const NavBar = () => {
       {/* Links and Theme Toggle */}
       <Box display="flex" alignItems="center">
         {loggedIn ? (
+          <>
+          <NavLink
+            to="/settings"
+            style={{
+              color: "white",
+              variant: "h1",
+              textDecoration: "none",
+              marginRight: "15px",
+            }}
+          >
+            Settings
+          </NavLink>
           <NavLink
             to="/login"
             onClick={handleLogout}
@@ -89,6 +101,7 @@ const NavBar = () => {
           >
             Logout
           </NavLink>
+          </>
         ) : (
           <>
             <NavLink

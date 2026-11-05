@@ -9,6 +9,7 @@ import AttachFileIcon from "@mui/icons-material/AttachFile";
 import ReportProblemIcon from "@mui/icons-material/ReportProblem";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome"; // For Mindmap
 import axios from "../axiosConfig";
+import { useLocation } from "react-router-dom";
 import { streamChat } from "../utils/streamChat";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -156,7 +157,7 @@ const TraceTimeline = ({ trace }) => {
     );
 };
 
-const MessageBubble = ({ role, content, sources, truncated, trace, onSeekAudio, onOpenPdf, onOpenImage }) => {
+const MessageBubble = ({ role, content, sources, truncated, trace, rewrittenQuery, onSeekAudio, onOpenPdf, onOpenImage }) => {
     const theme = useTheme();
     const isUser = role === "user";
 
@@ -262,7 +263,13 @@ const MessageBubble = ({ role, content, sources, truncated, trace, onSeekAudio, 
                                             : s.page != null ? () => onOpenPdf?.(s.fileId, s.page, s.originalName)
                                             : undefined
                                     }
-                                    label={`${s.originalName}${s.startSec != null ? ` ${formatTimestamp(s.startSec)}` : s.page ? ` p.${s.page}` : ""} • ${((s.score || 0) * 100).toFixed(1)}%`}
+                                    label={(() => {
+                                        const name = `${s.originalName}${s.startSec != null ? ` ${formatTimestamp(s.startSec)}` : s.page ? ` p.${s.page}` : ""}`;
+                                        // Keyword-only hits carry a fused RRF score, not a cosine —
+                                        // show the match kind instead of a misleading percentage.
+                                        if (s.matchedBy && !s.matchedBy.includes("vector")) return `${name} • text match`;
+                                        return `${name} • ${((s.score || 0) * 100).toFixed(1)}%`;
+                                    })()}
                                     variant="outlined"
                                     color={s.flagged ? "warning" : "default"}
                                     icon={s.flagged ? <ReportProblemIcon sx={{ fontSize: 14 }} /> : s.startSec != null ? <AudiotrackIcon sx={{ fontSize: 14 }} /> : s.page != null ? <PictureAsPdfIcon sx={{ fontSize: 14 }} /> : undefined}
@@ -272,6 +279,11 @@ const MessageBubble = ({ role, content, sources, truncated, trace, onSeekAudio, 
                             )
                         )}
                     </Box>
+                )}
+                {rewrittenQuery && (
+                    <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1, fontStyle: "italic" }}>
+                        Searched for: {rewrittenQuery}
+                    </Typography>
                 )}
             </Paper>
         </motion.div>
@@ -284,6 +296,7 @@ const MessageBubble = ({ role, content, sources, truncated, trace, onSeekAudio, 
 
 const Chat = () => {
     const theme = useTheme();
+    const location = useLocation();
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
@@ -326,6 +339,10 @@ const Chat = () => {
             setFeatures(data);
             if (!data.agent) setAgentMode(false);
         }).catch(() => {});
+        // Click-through from global search / external links
+        const target = location.state?.chatId;
+        if (target) loadChatSession(target);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     useEffect(() => {
@@ -492,7 +509,7 @@ const Chat = () => {
     // fails before delivering any events).
     const sendNonStream = async (body) => {
         const { data } = await axios.post("/api/v1/chat/message", body);
-        setMessages((prev) => [...prev, { role: "model", content: data.response, sources: data.sources }]);
+        setMessages((prev) => [...prev, { role: "model", content: data.response, sources: data.sources, rewrittenQuery: data.rewrittenQuery }]);
         if (!chatId) {
             setChatId(data.chatId);
             loadChatHistory();
@@ -527,6 +544,7 @@ const Chat = () => {
 
         let acc = "";
         let sources = null;
+        let rewrittenQuery;
         let newChatId = chatId;
         let sawToken = false;
         let streamFailed = false;
@@ -540,6 +558,7 @@ const Chat = () => {
                     role: "model",
                     content: acc,
                     sources,
+                    rewrittenQuery,
                     trace: liveTrace.length ? [...liveTrace] : undefined,
                     ...extra,
                 };
@@ -565,8 +584,9 @@ const Chat = () => {
                 onEvent: (evt) => {
                     if (evt.type === "meta") {
                         sources = evt.sources || null;
+                        rewrittenQuery = evt.rewrittenQuery;
                         newChatId = evt.chatId || newChatId;
-                        setMessages((prev) => [...prev, { role: "model", content: "", sources }]);
+                        setMessages((prev) => [...prev, { role: "model", content: "", sources, rewrittenQuery }]);
                         setLoading(false);
                     } else if (evt.type === "token") {
                         sawToken = true;
@@ -797,7 +817,7 @@ const Chat = () => {
                             </Box>
                         )}
                         {messages.map((msg, index) => (
-                            <MessageBubble key={index} role={msg.role} content={msg.content} sources={msg.sources} truncated={msg.truncated} trace={msg.trace} onSeekAudio={(fileId, sec) => setAudioSeek({ fileId, sec })} onOpenPdf={(fileId, page, name) => setPdfView({ fileId, page, name })} onOpenImage={(fileId, name) => setImageView({ fileId, name })} />
+                            <MessageBubble key={index} role={msg.role} content={msg.content} sources={msg.sources} truncated={msg.truncated} trace={msg.trace} rewrittenQuery={msg.rewrittenQuery} onSeekAudio={(fileId, sec) => setAudioSeek({ fileId, sec })} onOpenPdf={(fileId, page, name) => setPdfView({ fileId, page, name })} onOpenImage={(fileId, name) => setImageView({ fileId, name })} />
                         ))}
                         {loading && (
                             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: "flex", alignItems: "center", gap: "10px" }}>

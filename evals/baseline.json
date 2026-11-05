@@ -1,10 +1,10 @@
 {
-  "timestamp": "2026-11-05T05-50-24-235Z",
-  "note": "Phase 3B baseline — page citations, image ingestion, CSV analyst. RAG + table metrics from the full 2026-11-05T05:50Z in-memory run (all 31 questions generated successfully). pageCitationAccuracy measures the cited chunk's metadata.page (verified independently: 3/3 pages correct). imageQAAccuracy measured live (2/2, cov 1.0). The 3 agent misses (flashcards, web-browse, analyze-table) were AGENT_FAILED 429s — the key hit its daily generate quota wall mid-run, infrastructure not behavior; agent metrics carried over from the last verified full agent suite (Phase 3A: all 1.0). mrr recovered 0.859->0.930 as the corpus grew. evalRetries: quota backoff used throughout the run.",
+  "timestamp": "2026-11-05T08-42-20-908Z",
+  "note": "Phase 4 baseline — retrieval quality (hybrid keyword leg / RRF, query rewriting ON, rerank OFF), Smart/Exact global search, chat summaries, quota-aware error classification, account-deletion cascade. All metrics from ONE clean full in-memory run at the final default config (RAG_REWRITE on): all 31 RAG questions + all 11 agent cases generated successfully — no carried numbers. Free-tier daily quota exhausted mid-run on gemini-2.5-flash and gemini-3.5-flash; the fallback chain (gemini-3.5-flash-lite, gemini-3.6-flash) kept every question answered — evalRetries reflect quota backoff, not behavior. faithfulness 0.984 (3B: 0.952), all citation/QA metrics 1.0.",
   "metrics": {
     "hitAtK": 0.967741935483871,
     "mrr": 0.9301075268817204,
-    "faithfulness": 0.9516129032258065,
+    "faithfulness": 0.9838709677419355,
     "relevance": 1,
     "factCoverage": 0.967741935483871,
     "abstentionAccuracy": 1,
@@ -13,10 +13,10 @@
     "pageCitationAccuracy": 1,
     "imageQAAccuracy": 1,
     "tableQueryAccuracy": 1,
-    "meanLatencyMs": 9619,
+    "meanLatencyMs": 4373,
     "agent": {
       "toolSelectionAccuracy": 1,
-      "avgSteps": 2.5,
+      "avgSteps": 2.64,
       "contentAccuracy": 1,
       "abstentionAccuracy": 1,
       "injectionSafe": 1

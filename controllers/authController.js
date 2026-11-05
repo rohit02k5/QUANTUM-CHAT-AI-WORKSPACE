@@ -147,33 +147,94 @@ exports.forgotPasswordController = async (req, res, next) => {
     }
 };
 
-// Delete the authenticated user's account and every artifact they own:
-// file docs + GridFS blobs, chunks, ingestion jobs, chats, personas,
-// flashcard sets, usage events, web-search quota docs. Owner-scoped by
-// requireSignIn; irreversible.
+// Delete the authenticated user's account and EVERY artifact they own —
+// the cascade registry (utils/accountCascade) is the single source of truth
+// and a test asserts it covers every model with a `user` path.
+//
+// Confirmation is required and differs by account type:
+//   - password accounts: {password} must verify against matchPassword
+//   - OAuth-only accounts: {confirmEmail} must equal the account email AND
+//     {confirmToken} must match a fresh token from POST /account/delete-token
+// Irreversible. Rate-limited via authLimiter on the /api/v1/auth mount.
 exports.deleteAccountController = async (req, res, next) => {
     try {
+        const crypto = require("crypto");
         const mongoose = require("mongoose");
-        const gridfs = require("../utils/gridfs");
-        const File = require("../models/File");
-        const uid = req.user._id;
-        const col = (n) => mongoose.connection.collection(n);
+        const { cascadeDelete } = require("../utils/accountCascade");
+        const user = await userModel.findById(req.user._id).select("+password");
+        if (!user) return next(new errorResponse("User not found", 404));
 
-        const files = await File.find({ user: uid }).select("_id gridfsId").lean();
-        await Promise.all(files.map((f) => (f.gridfsId ? gridfs.remove(f.gridfsId).catch(() => {}) : null)));
-        await Promise.all([
-            col("files").deleteMany({ user: uid }),
-            col("chunks").deleteMany({ user: uid }),
-            col("ingestionjobs").deleteMany({ user: uid }),
-            col("chats").deleteMany({ user: uid }),
-            col("personas").deleteMany({ user: uid }),
-            col("flashcardsets").deleteMany({ user: uid }),
-            col("usageevents").deleteMany({ user: uid }),
-            col("websearchquotas").deleteMany({ user: uid }),
-        ]);
+        if (user.password) {
+            const { password } = req.body || {};
+            if (!password || !(await user.matchPassword(password))) {
+                return next(new errorResponse("Password confirmation failed", 401));
+            }
+        } else {
+            // OAuth-only: typed email + a fresh short-lived confirm token.
+            const { confirmEmail, confirmToken } = req.body || {};
+            if (!confirmEmail || String(confirmEmail).toLowerCase() !== String(user.email).toLowerCase()) {
+                return next(new errorResponse("Type your account email to confirm deletion", 400));
+            }
+            const hash = confirmToken && crypto.createHash("sha256").update(String(confirmToken)).digest("hex");
+            const doc = hash && await mongoose.connection.collection("deletionconfirms").findOne({
+                _id: user._id, tokenHash: hash, expireAt: { $gt: new Date() },
+            });
+            if (!doc) {
+                return next(new errorResponse("Fresh confirmation required — request a new confirm token", 403));
+            }
+        }
+
+        const uid = req.user._id;
+        const deleted = await cascadeDelete(uid);
+        await mongoose.connection.collection("deletionconfirms").deleteMany({ _id: uid });
         await userModel.deleteOne({ _id: uid });
         res.clearCookie("refreshToken");
-        res.status(200).json({ success: true, message: "Account and all associated data deleted" });
+        res.status(200).json({ success: true, message: "Account and all associated data deleted", deleted });
+    } catch (err) {
+        next(err);
+    }
+};
+
+// Minimal account info — drives UI like the delete-account confirmation
+// (password vs OAuth-only flow) without leaking anything sensitive.
+exports.meController = async (req, res, next) => {
+    try {
+        const user = await userModel.findById(req.user._id).select("email password googleId githubId username");
+        if (!user) return next(new errorResponse("User not found", 404));
+        res.status(200).json({
+            success: true,
+            user: {
+                username: user.username,
+                email: user.email,
+                hasPassword: !!user.password,
+                oauth: !!(user.googleId || user.githubId),
+            },
+        });
+    } catch (err) {
+        next(err);
+    }
+};
+
+// Issue a short-lived (60s) deletion confirmation token for OAuth-only
+// accounts. Authenticated POST — proves a fresh, intentional re-auth.
+exports.issueDeletionToken = async (req, res, next) => {
+    try {
+        const crypto = require("crypto");
+        const mongoose = require("mongoose");
+        const token = crypto.randomBytes(24).toString("hex");
+        const coll = mongoose.connection.collection("deletionconfirms");
+        await coll.createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 }).catch(() => {});
+        await coll.updateOne(
+            { _id: req.user._id },
+            {
+                $set: {
+                    tokenHash: crypto.createHash("sha256").update(token).digest("hex"),
+                    expireAt: new Date(Date.now() + 60 * 1000),
+                },
+            },
+            { upsert: true }
+        );
+        res.status(200).json({ success: true, confirmToken: token, expiresInSec: 60 });
     } catch (err) {
         next(err);
     }
