@@ -199,7 +199,7 @@ exports.deleteAccountController = async (req, res, next) => {
 // (password vs OAuth-only flow) without leaking anything sensitive.
 exports.meController = async (req, res, next) => {
     try {
-        const user = await userModel.findById(req.user._id).select("email password googleId githubId username");
+        const user = await userModel.findById(req.user._id).select("email password googleId githubId username memoryEnabled memoryNoticeSeen");
         if (!user) return next(new errorResponse("User not found", 404));
         res.status(200).json({
             success: true,
@@ -208,6 +208,8 @@ exports.meController = async (req, res, next) => {
                 email: user.email,
                 hasPassword: !!user.password,
                 oauth: !!(user.googleId || user.githubId),
+                memoryEnabled: user.memoryEnabled !== false,
+                memoryNoticeSeen: !!user.memoryNoticeSeen,
             },
         });
     } catch (err) {

@@ -552,6 +552,99 @@ never a RegExp, and group keys are `Map`-safe against `__proto__`
 columns.
 
 ---
+## Long-Term Memory — a second brain that remembers (opt-out)
+
+Quantum can remember durable facts about you — preferences, role, goals,
+projects — and use them to personalize every later chat and agent run.
+
+```text
+user turn ──► every MEMORY_EVERY_N_TURNS turns AND only when a cheap
+   local heuristic sees durable first-person statements
+      ──► cheap-model extraction (≤3 items, structured JSON)
+      ──► server-side sensitive-data denylist drops credentials/ids
+      ──► dedupe: cosine > MEMORY_DEDUPE_THRESHOLD updates in place
+      ──► insert with MEMORY_MAX cap (LRU eviction, logged)
+next turn ──► top-MEMORY_TOP_K above MEMORY_MIN_SCORE (in-process cosine,
+   per-user capped set — no new Atlas index) injected AFTER the persona
+   and BEFORE the guardrail rules
+```
+
+**Security boundaries:** extraction reads *user-authored text only* —
+document chunks, attachments, transcripts, tool results, web results and
+assistant text never reach the extraction prompt, so a poisoned document
+can't write memories. The prompt forbids sensitive data **and** a
+server-side regex drops passwords, keys, tokens, government/financial
+identifiers, health details and precise locations regardless of what the
+model returns. Injection-flagged memories are dropped from the prompt.
+
+API: `GET/POST /api/v1/memories`, `PATCH/DELETE /api/v1/memories/:id`,
+`DELETE /api/v1/memories` (forget all), `GET /api/v1/memories/export`,
+`PATCH /api/v1/me/memory {enabled}` — all owner-scoped. The Memory page
+groups memories by category with inline edit, forget-all, a count against
+the cap, and a global toggle; replies show a "used N memories" chip.
+
+## Study Mode — spaced repetition from your documents
+
+Decks and cards (SM-2 scheduling, pure `services/sm2.js`), review
+sessions, 7-day forecasts, streaks, retention stats — plus AI-generated
+quizzes graded on the server.
+
+- `services/sm2.js` is a pure function `(state, grade 0-5, now) -> state`:
+  grade < 3 resets reps and lapses, ease floors at 1.3 — unit-tested
+  against a hand-computed sequence.
+- `POST /api/v1/study/review` validates ownership, writes a `ReviewLog`
+  (1-year TTL) and guards double-submits; `GET /api/v1/study/stats`
+  computes streaks in the caller's timezone (`tz` param, IANA-validated).
+- Quizzes: `POST /api/v1/study/quiz {fileId|deckId, count<=10}` — the
+  cheap model emits structured MCQs over guard-wrapped source text;
+  server-side validation requires exactly 4 unique options and a valid
+  index; `submit` grades from the stored snapshot (client-sent scores
+  ignored) and returns explanations.
+- `STUDY_MAX_CARDS` caps total cards per user; `migrate-flashcards-to-decks.js`
+  moves legacy `FlashcardSet` data (idempotent, `--dry-run`, never deletes).
+- Studio's flashcard generation has an **Add to deck** button; the
+  agent's `create_flashcards` tool produces Decks/Cards directly.
+
+## Export — your data, portable
+
+- **Chat → Markdown** (`GET /api/v1/export/chat/:id`, or the download
+  button in Chat): title, timestamps, messages, citations as footnotes,
+  agent-trace summary.
+- **Flashcards → CSV** (`GET /api/v1/export/cards.csv`): UTF-8 with BOM,
+  `Front,Back,Deck` columns, RFC-4180 quoting, and formula-injection
+  protection — cells starting `= + - @` get a leading apostrophe. Pass
+  `?escape=0` for raw/Anki-compatible output.
+- **Memories → JSON** (`GET /api/v1/memories/export`).
+- A print stylesheet (`client/src/print.css`) makes chats and flashcards
+  print/PDF cleanly from the browser. No public share links — every
+  export endpoint is owner-authenticated.
+
+## Public API — query your knowledge base from anywhere
+
+Create a key in **Settings → API keys** (shown once, stored as SHA-256,
+max 5 active), then call the Bearer-authenticated endpoint:
+
+```bash
+curl -X POST https://your-host/api/v1/public/chat \
+  -H "Authorization: Bearer qk_..." \
+  -H "Content-Type: application/json" \
+  -d '{"message":"summarize my notes","fileIds":["<fileId>"],"topK":5}'
+# -> {"answer":"...","sources":[{"fileId","name","page","snippet"}],"usage":{...}}
+```
+
+- Retrieval is scoped to **that key owner's READY files** — `fileIds` are
+  intersected with ownership; foreign ids are silently dropped. Same
+  guard-wrapped RAG path as in-app chat (no agent, tools, web search,
+  memory, or uploads).
+- Limits: 30 req/15 min per key (keyed by key id, not IP),
+  `API_KEY_DAILY_CAP`/day per key which also counts toward the owner's
+  `USER_DAILY_AI_CAP`, 16 KB body limit, 2 KB message cap. Revoked and
+  unknown keys get 401. `UsageEvent` rows record `kind:"api"` + `apiKeyId`.
+- The route is Bearer-only (cookies ignored), so it uses a permissive CORS
+  policy scoped to `/api/v1/public/*` — the app-wide whitelist is
+  untouched for every other route.
+
+---
 ## Local Setup
 ```text
 git clone https://github.com/rohit02k5/QUANTUM-CHAT-AI-WORKSPACE.git

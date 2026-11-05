@@ -4,7 +4,7 @@ const usageEventSchema = new mongoose.Schema({
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     kind: {
         type: String,
-        enum: ["chat", "agent", "embed", "transcribe", "vision", "judge", "tool", "rerank"],
+        enum: ["chat", "agent", "embed", "transcribe", "vision", "judge", "tool", "rerank", "memory", "quiz", "api"],
         required: true,
     },
     model: { type: String },
@@ -14,6 +14,7 @@ const usageEventSchema = new mongoose.Schema({
     ok: { type: Boolean, default: true },
     errorCode: { type: String },
     requestId: { type: String },
+    apiKeyId: { type: mongoose.Schema.Types.ObjectId, ref: "ApiKey" }, // Phase 5.4 public-key calls
     createdAt: { type: Date, default: Date.now, expires: 90 * 24 * 60 * 60 }, // TTL: 90 days
 });
 

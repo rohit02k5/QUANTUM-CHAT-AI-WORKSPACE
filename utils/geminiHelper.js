@@ -107,6 +107,15 @@ class GeminiHelper {
             process.env.GEMINI_FALLBACK_MODELS || "gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.6-flash"
         ).split(",");
         this.embeddingModel = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2";
+        // Cheap-model lane (Phase 5.0d): titles, summaries, rewrites, memory
+        // extraction, rerank — everything that isn't the answer itself.
+        // GEMINI_CHEAP_MODEL overrides; default is the configured lite/last
+        // fallback. When the cheap model is exhausted the call falls through
+        // the normal chain instead of dying.
+        this.cheapModelName = process.env.GEMINI_CHEAP_MODEL
+            || this.fallbackModels.find((m) => m.includes("lite"))
+            || this.fallbackModels[this.fallbackModels.length - 1]
+            || this.modelName;
         // Audio transcription model — verified at boot; falls back to modelName
         this.transcribeModelName = process.env.GEMINI_TRANSCRIBE_MODEL || this.modelName;
         this.transcribeModelFallback = false;
@@ -179,6 +188,46 @@ class GeminiHelper {
         } catch (error) {
             recordUsage({ kind: "embed", model: this.embeddingModel, latencyMs: Date.now() - start, ok: false, errorCode: classifyError(error).code });
             logger.error({ err: error.message }, "[GeminiHelper] Embedding Error");
+            throw error;
+        }
+    }
+
+    /**
+     * Batch embed — ONE embedContent call for several texts (memory dedupe
+     * inserts, quiz paths). Per-text cache: cached entries don't consume an
+     * API call. Returns an array aligned with `texts`; failed slots are null.
+     */
+    async getEmbeddings(texts, { task = "document" } = {}) {
+        if (!Array.isArray(texts)) return [];
+        if (this._mock) return Promise.all(texts.map((t) => this._mock.embed(t)));
+        const taskType = task === "query" ? "RETRIEVAL_QUERY" : "RETRIEVAL_DOCUMENT";
+        const cache = this._embedCache();
+        const out = new Array(texts.length).fill(null);
+        const toFetch = [];
+        texts.forEach((t, i) => {
+            const hit = cache?.read(t, taskType);
+            if (hit) { this.calls.embedCached++; out[i] = hit; }
+            else toFetch.push({ i, t });
+        });
+        if (!toFetch.length) return out;
+        const start = Date.now();
+        try {
+            this.calls.embed++;
+            const result = await this.ai.models.embedContent({
+                model: this.embeddingModel,
+                contents: toFetch.map((x) => x.t),
+                config: { outputDimensionality: EMBEDDING_DIMS, taskType },
+            });
+            const embs = result.embeddings || [];
+            toFetch.forEach(({ i, t }, j) => {
+                const vec = embs[j]?.values ? l2Normalize(embs[j].values) : null;
+                out[i] = vec;
+                if (vec && cache) cache.write(t, taskType, vec);
+            });
+            recordUsage({ kind: "embed", model: this.embeddingModel, latencyMs: Date.now() - start, ok: true });
+            return out;
+        } catch (error) {
+            recordUsage({ kind: "embed", model: this.embeddingModel, latencyMs: Date.now() - start, ok: false, errorCode: classifyError(error).code });
             throw error;
         }
     }
@@ -302,26 +351,37 @@ class GeminiHelper {
     }
 
     /**
-     * Single-shot generation on the cheapest configured model (used for
-     * background work like auto-titles). No fallback chain — cheap by design.
+     * Single-shot generation on the cheap lane (GEMINI_CHEAP_MODEL, default
+     * the configured lite model) used for background work — titles, chat
+     * summaries, query rewrites, memory extraction, rerank. One attempt per
+     * model, cheap first then the rest of the chain (per-model free-tier
+     * quotas are separate, so a dead cheap model must not kill background
+     * tasks). Caller handles a final failure — never throws early on
+     * transient/daily-quota errors while a fallback remains.
      */
     async generateCheapest(prompt, config = {}, kind = "chat", signal = null) {
         if (this._mock) return this._mock.generate(prompt, config);
-        const model = this.fallbackModels[this.fallbackModels.length - 1] || this.modelName;
-        const start = Date.now();
-        try {
-            this.calls.generate++;
-            const result = await this.ai.models.generateContent({
-                model,
-                contents: prompt,
-                config: { ...config, abortSignal: signal || undefined },
-            });
-            recordUsage({ kind, model, latencyMs: Date.now() - start, ok: true, usageMetadata: result.usageMetadata });
-            return result;
-        } catch (error) {
-            recordUsage({ kind, model, latencyMs: Date.now() - start, ok: false, errorCode: classifyError(error).code });
-            throw error;
+        const models = [...new Set([this.cheapModelName, this.modelName, ...this.fallbackModels])];
+        let lastError;
+        for (const model of models) {
+            if (signal?.aborted) throw new Error("aborted");
+            const start = Date.now();
+            try {
+                this.calls.generate++;
+                const result = await this.ai.models.generateContent({
+                    model,
+                    contents: prompt,
+                    config: { ...config, abortSignal: signal || undefined },
+                });
+                recordUsage({ kind, model, latencyMs: Date.now() - start, ok: true, usageMetadata: result.usageMetadata });
+                return result;
+            } catch (error) {
+                lastError = error;
+                recordUsage({ kind, model, latencyMs: Date.now() - start, ok: false, errorCode: classifyError(error).code });
+                logger.warn({ model, status: error.status }, "[GeminiHelper] cheap-lane model failed, trying next");
+            }
         }
+        throw lastError;
     }
 
     /**
@@ -390,11 +450,15 @@ class GeminiHelper {
         const requested = process.env.GEMINI_TRANSCRIBE_MODEL;
         const configured = [this.modelName, ...this.fallbackModels, this.embeddingModel];
         const unique = [...new Set(configured, requested).values()].filter(Boolean);
-        const result = { chat: [this.modelName, ...this.fallbackModels], embedding: this.embeddingModel, transcribe: this.transcribeModelName, missing: [] };
+        const result = { chat: [this.modelName, ...this.fallbackModels], embedding: this.embeddingModel, transcribe: this.transcribeModelName, cheap: this.cheapModelName, missing: [] };
         if (this._mock) return result;
         try {
             const pager = await this.ai.models.list({ config: { pageSize: 200 } });
             const available = new Set((pager.page || []).map((m) => m.name.replace(/^models\//, "")));
+            if (!available.has(this.cheapModelName)) {
+                logger.warn({ requested: this.cheapModelName, fallback: this.modelName }, "[GeminiHelper] GEMINI_CHEAP_MODEL unavailable — cheap lane falls back to the chat model");
+                result.cheap = this.modelName;
+            }
             result.missing = unique.filter((m) => !available.has(m));
             if (result.missing.length) {
                 logger.warn({ missing: result.missing }, "[GeminiHelper] configured models not available on this key");

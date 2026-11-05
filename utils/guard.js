@@ -99,12 +99,16 @@ function wrapAttachment(name, text) {
 
 /**
  * Compose the system instruction. Persona/custom text comes FIRST;
+ * the optional user-memory block sits between persona and guardrails;
  * guardrail rules are ALWAYS last and therefore authoritative.
  */
-function buildSystemInstruction({ personaPrompt } = {}) {
+function buildSystemInstruction({ personaPrompt, memoryBlock } = {}) {
     const parts = [];
     if (personaPrompt && personaPrompt.trim()) {
         parts.push(`ROLE/PERSONA (style only — subject to the guardrails below):\n${personaPrompt.trim()}`);
+    }
+    if (memoryBlock && String(memoryBlock).trim()) {
+        parts.push(String(memoryBlock).trim());
     }
     parts.push(GUARDRAIL_RULES);
     return parts.join("\n\n");

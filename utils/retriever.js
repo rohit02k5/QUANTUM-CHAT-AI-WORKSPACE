@@ -9,12 +9,33 @@ const CANDIDATES = parseInt(process.env.RAG_CANDIDATES || "20", 10);
 const RRF_K = parseInt(process.env.RAG_RRF_K || "60", 10);
 const HYBRID = process.env.RAG_HYBRID === "true";
 const TEXT_INDEX = "chunks_text_search";
-// Keyword admission: a Mongo textScore is roughly 1 point per matched term.
-// >=3 means at least ~3 query terms matched — strong enough lexical evidence
-// to admit an exact identifier while single/stray-term matches stay out.
-// Measured on the stress set: 1-2 terms injects enough noise to regress
-// near-duplicate and paraphrase categories under RRF; 3 ties vector-only.
+// Keyword admission: a Mongo textScore is roughly 0.58 points per matched
+// term on short docs, so >=3 means ~5+ query terms matched — strong lexical
+// evidence while single/stray-term matches stay out. Measured on the stress
+// set: 1-2 terms injects enough noise to regress near-duplicate and
+// paraphrase categories under RRF; 3 ties vector-only.
 const KEYWORD_MIN_SCORE = parseFloat(process.env.RAG_KEYWORD_MIN_SCORE || "3");
+
+// Identifier-rescue admission (Phase 5.0c): a bare textScore threshold
+// structurally rejects single-token identifiers — an exact "ERR-4021" match
+// scores ~0.58 and could never pass. A token that LOOKS like an identifier
+// (alphanumeric containing a digit, allowing dashes/underscores/dots —
+// error codes, SKUs, versions) and that appears verbatim in the chunk is
+// admitted regardless of score. Boundary-checked so "4.1.7" can't match
+// inside "44.1.70".
+const IDENT_TOKEN = /(?=[A-Za-z0-9_.-]*\d)[A-Za-z0-9][A-Za-z0-9_.-]{2,}/g;
+function identifierTokens(query) {
+    return [...new Set((String(query).match(IDENT_TOKEN) || []).filter((t) => t.length >= 3))];
+}
+function matchesIdentifier(text, token) {
+    const esc = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(^|[^A-Za-z0-9])${esc}([^A-Za-z0-9]|$)`, "i").test(text);
+}
+function admitKeyword(chunk, queryTokens) {
+    if (chunk.score >= KEYWORD_MIN_SCORE) return true;
+    const text = chunk.text || chunk.pageContent || "";
+    return queryTokens.some((tok) => matchesIdentifier(text, tok));
+}
 
 // $vectorSearch on a collection without the index returns [] (no error) on
 // Atlas, so a missing index can never reach the cosine fallback. Check it
@@ -161,9 +182,11 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = [], opts = {}) 
     // ---- vector leg ----
     let vectorResults = [];
     if (mode !== "keyword") {
-        let queryVector;
+        // opts.queryVector lets callers reuse one embedding across RAG and
+        // memory retrieval (Phase 5.1) instead of embedding twice.
+        let queryVector = opts.queryVector;
         try {
-            queryVector = await geminiHelper.getEmbedding(query, { task: "query" });
+            if (!queryVector) queryVector = await geminiHelper.getEmbedding(query, { task: "query" });
             if (!Array.isArray(queryVector) || queryVector.length !== EMBEDDING_DIM) queryVector = null;
         } catch { queryVector = null; }
 
@@ -218,7 +241,8 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = [], opts = {}) 
                 .sort({ score: { $meta: "textScore" } })
                 .limit(candidates)
                 .toArray();
-            keywordResults = keywordResults.filter((c) => c.score >= KEYWORD_MIN_SCORE);
+            const queryTokens = identifierTokens(query);
+            keywordResults = keywordResults.filter((c) => admitKeyword(c, queryTokens));
         } catch {
             keywordResults = [];
         }
@@ -320,5 +344,7 @@ module.exports = {
     EMBEDDING_DIMS: EMBEDDING_DIM,
     ensureTextIndex,
     rrf,
+    identifierTokens,
+    admitKeyword,
     _resetIndexCache: () => { _indexVerified = false; _textIndexVerified = false; },
 };

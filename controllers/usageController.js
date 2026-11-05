@@ -42,6 +42,7 @@ exports.myUsage = async (req, res) => {
             byKind,
             byModel,
             daily: Object.entries(byDay).sort(([a], [b]) => (a < b ? -1 : 1)).map(([date, count]) => ({ date, count })),
+            dailyCap: await require("../utils/aiQuota").status(req.user._id, req.user.email),
         });
     } catch (err) {
         res.status(500).json({ message: "Usage query failed" });

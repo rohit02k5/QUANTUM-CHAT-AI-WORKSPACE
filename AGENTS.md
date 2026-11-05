@@ -49,6 +49,15 @@ This file contains high-signal information for agents working on the Quantum AI 
 - Tests script the model deterministically via `utils/geminiMock.js` `__setAgentScript([{functionCalls:[...]},{text}]})`.
 - `@google/genai` stays confined to `utils/geminiHelper.js` — function-calling helpers (`generateAgentTurn`, `getFunctionCalls`, `getResponseParts`) live there.
 
+## Phase 5 — Memory, Study, Export, Public API
+- `utils/memory.js` — extraction reads USER text only; `hasDurableStatements` gate fires ≤ every `MEMORY_EVERY_N_TURNS`; server-side `isSensitive` denylist runs on model output AND manual adds; dedupe cosine ≥ `MEMORY_DEDUPE_THRESHOLD`; `MEMORY_MAX` cap evicts LRU; `getRelevantMemories` uses in-process cosine (NO new Atlas index) and shares the RAG `queryVector`; `buildMemoryBlock` sanitizes + drops injection-flagged items and sits between persona and guardrails.
+- `services/sm2.js` is PURE — `(state, grade, now) -> state`; never call Date.now() inside. `Card.lastReviewedAt` guards double-submits. `REVIEW_LOG` TTL index is fixed at 1 year.
+- `utils/export.js` — `toCsv` handles BOM, RFC-4180 quoting and `= + - @` formula-escape (`escape=0` disables); `chatToMarkdown` builds footnoted exports. All export routes are owner-authenticated.
+- `utils/apiKeys.js` — `qk_` keys, sha256+prefix only; `resolveKey` is the ONLY public auth path; management routes are JWT-only. `/api/v1/public/*` is mounted BEFORE the global JSON parser (16 KB limit) and has its own permissive CORS — do not widen it. Per-key buckets key on key id; spend also counts toward `USER_DAILY_AI_CAP`.
+- `utils/aiQuota.js` — TTL daily counter; `tryConsume(userId,email)` returns `{allowed}`; `ADMIN_EMAILS` exempt. Mount `dailyAiCap` on AI routes; one agent run counts once.
+- `GEMINI_CHEAP_MODEL` routes non-answer calls (titles/summaries/rewrite/memory/rerank/quiz) to the lite model with chain fallback — use `generateCheapest`, never pin a model.
+- New user-owned models MUST be registered in `utils/accountCascade.js` — a test fails otherwise.
+
 ## Security Notes
 - All `/api/v1/*` routes except auth register/login/OAuth are behind `requireSignIn`.
 - `/uploads` is NOT served statically — files stream through `GET /api/v1/files/:fileId/view` (ownership-checked).

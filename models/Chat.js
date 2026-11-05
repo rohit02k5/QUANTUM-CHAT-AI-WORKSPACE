@@ -73,6 +73,8 @@ const chatSchema = new mongoose.Schema({
             ],
             truncated: { type: Boolean, default: false }, // stream was aborted mid-answer
             rewrittenQuery: { type: String }, // RAG_REWRITE: retrieval used this standalone query
+            // Phase 5.1 — ids of the Memory docs injected into this turn
+            usedMemories: [{ type: mongoose.Schema.Types.ObjectId, ref: "Memory" }],
             timestamp: {
                 type: Date,
                 default: Date.now,
