@@ -3,7 +3,8 @@ const {
   summaryController,
   chatbotController,
   analyzeContent,
-  generateActionPlan
+  generateActionPlan,
+  generateMeetingMinutes
 } = require("../controllers/openaiController");
 
 const router = express.Router();
@@ -15,6 +16,7 @@ router.post("/summary", summaryController);
 router.post("/chatbot", chatbotController);
 router.post("/analyze", analyzeContent);
 router.post("/action-plan", generateActionPlan);
+router.post("/meeting-minutes", generateMeetingMinutes);
 
 
 module.exports = router;

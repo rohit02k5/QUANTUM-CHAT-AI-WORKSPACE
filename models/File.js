@@ -15,9 +15,14 @@ const fileSchema = new mongoose.Schema({
         required: true,
     },
     path: {
-        type: String,
-        required: true,
+        type: String, // legacy local-disk path (pre-GridFS); null for GridFS files
     },
+    // GridFS object id in bucket "uploads" — canonical byte store (Phase 3A)
+    gridfsId: { type: mongoose.Schema.Types.ObjectId },
+    kind: { type: String, enum: ["doc", "audio"], default: "doc" },
+    // Ingestion status: files that aren't "ready" are excluded from RAG/agent
+    status: { type: String, enum: ["processing", "ready", "failed"], default: "ready" },
+    durationSec: { type: Number }, // audio files only
     mimetype: {
         type: String,
     },

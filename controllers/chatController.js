@@ -64,6 +64,7 @@ async function prepareMessageContext(userId, chat, message, { useDocuments, docu
                     fileId: c.fileId,
                     originalName: c.originalName,
                     page: c.metadata?.page,
+                    startSec: c.metadata?.startSec,
                     score: c.score,
                     snippet: (c.text || "").substring(0, 200),
                     flagged: flags[i] || undefined,

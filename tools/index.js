@@ -64,6 +64,7 @@ const registry = {
                     fileId: c.fileId?.toString(),
                     file: c.originalName,
                     page: c.metadata?.page,
+                    startSec: c.metadata?.startSec,
                     score: Math.round((c.score || 0) * 1000) / 1000,
                     text: (c.text || "").slice(0, CHUNK_RETURN_CHARS),
                     flagged: guard.detectInjection(c.text) || undefined,
@@ -80,21 +81,16 @@ const registry = {
         schema: z.object({}),
         handler: async (ctx) => {
             const files = await File.find({ user: ctx.userId, isTemp: { $ne: true } })
-                .select("originalName mimetype uploadDate")
+                .select("originalName mimetype kind status uploadDate")
                 .sort({ uploadDate: -1 })
                 .limit(50)
                 .lean();
-            const counts = await Chunk.aggregate([
-                { $match: { user: new mongoose.Types.ObjectId(ctx.userId) } },
-                { $group: { _id: "$file", n: { $sum: 1 } } },
-            ]);
-            const indexed = new Set(counts.filter((c) => c.n > 0).map((c) => c._id.toString()));
             return {
                 documents: files.map((f) => ({
                     id: f._id.toString(),
                     name: f.originalName,
-                    kind: (f.mimetype || "unknown").split("/").pop(),
-                    status: indexed.has(f._id.toString()) ? "indexed" : "unindexed",
+                    kind: f.kind || "doc",
+                    status: f.status || "ready",
                 })),
             };
         },
@@ -112,6 +108,7 @@ const registry = {
         handler: async (ctx, args) => {
             const file = await File.findOne({ _id: args.fileId, user: ctx.userId });
             if (!file) return { ok: false, error: "document not found" };
+            if (file.status && file.status !== "ready") return { ok: false, error: `document is ${file.status === "failed" ? "failed to ingest" : "still being ingested"}` };
             if (file.overview) return { fileId: args.fileId, name: file.originalName, overview: file.overview, cached: true };
             const text = (file.content || "").slice(0, 12000);
             if (!text.trim()) return { ok: false, error: "document has no extracted text" };
@@ -149,6 +146,7 @@ const registry = {
             if (args.fileId) {
                 file = await File.findOne({ _id: args.fileId, user: ctx.userId });
                 if (!file) return { ok: false, error: "document not found" };
+                if (file.status && file.status !== "ready") return { ok: false, error: `document is ${file.status === "failed" ? "failed to ingest" : "still being ingested"}` };
             }
             const basis = file
                 ? `the following document text:\n${(file.content || "").slice(0, 10000)}`

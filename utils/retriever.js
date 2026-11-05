@@ -6,6 +6,25 @@ const EMBEDDING_DIM = parseInt(process.env.EMBEDDING_DIMS || "768", 10);
 const EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2";
 const MIN_SCORE = parseFloat(process.env.RAG_MIN_SCORE || "0.5");
 
+// $vectorSearch on a collection without the index returns [] (no error) on
+// Atlas, so a missing index can never reach the cosine fallback. Check it
+// explicitly. Only a positive verdict is cached — an index created later is
+// picked up on the next query without a restart.
+let _indexVerified = false;
+async function vectorIndexAvailable() {
+    if (_indexVerified) return true;
+    try {
+        const idx = await mongoose.connection.collection("chunks")
+            .listSearchIndexes().toArray();
+        _indexVerified = idx.some((i) => i.name === VECTOR_INDEX);
+        return _indexVerified;
+    } catch {
+        // listSearchIndexes unsupported (non-Atlas): try $vectorSearch anyway —
+        // its error path still reaches the fallback.
+        return true;
+    }
+}
+
 /**
  * Retrieve the top-K most relevant chunks for a user query.
  *
@@ -28,6 +47,21 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = []) {
         .filter((id) => id && (id instanceof mongoose.Types.ObjectId || mongoose.Types.ObjectId.isValid(id)))
         .map((id) => (id instanceof mongoose.Types.ObjectId ? id : new mongoose.Types.ObjectId(id)));
 
+    // Only files that finished ingestion are retrievable — a "processing" or
+    // "failed" file's partial chunks must never leak into the prompt. Legacy
+    // records have no status field and count as ready ($nin matches missing).
+    const readyFiles = await mongoose.connection.collection("files")
+        .find(
+            { user: userObjectId, status: { $nin: ["processing", "failed"] }, isTemp: { $ne: true } },
+            { projection: { _id: 1 } }
+        )
+        .toArray();
+    const readyIds = new Set(readyFiles.map((f) => f._id.toString()));
+    const scopedIds = fileObjectIds.length
+        ? fileObjectIds.filter((id) => readyIds.has(id.toString()))
+        : readyFiles.map((f) => f._id);
+    if (!scopedIds.length) return [];
+
     // 1. Embed the query (task-typed for retrieval)
     let queryVector;
     try {
@@ -42,12 +76,11 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = []) {
     }
 
     // 2. Try Atlas Vector Search
-    const scopeFilter = { user: userObjectId };
-    if (fileObjectIds.length > 0) scopeFilter.file = { $in: fileObjectIds };
+    const scopeFilter = { user: userObjectId, file: { $in: scopedIds } };
     // Only chunks embedded at the active dimensionality are comparable
     const vectorFilter = { ...scopeFilter, embeddingDims: EMBEDDING_DIM };
 
-    try {
+    if (await vectorIndexAvailable()) try {
         const chunks = await mongoose.connection.collection("chunks").aggregate([
             {
                 $vectorSearch: {
@@ -78,6 +111,8 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = []) {
         return chunks.filter((c) => c.score === undefined || c.score >= MIN_SCORE);
     } catch (err) {
         console.warn("[Retriever] Atlas vector search unavailable, using local fallback...");
+    } else {
+        console.warn(`[Retriever] vector index '${VECTOR_INDEX}' not found, using local fallback...`);
     }
 
     // 3. Local fallback: cosine similarity over this user's chunks.

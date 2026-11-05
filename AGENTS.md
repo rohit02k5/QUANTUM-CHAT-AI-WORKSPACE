@@ -56,3 +56,13 @@ This file contains high-signal information for agents working on the Quantum AI 
 - Refresh flow: `POST /api/v1/auth/refresh` accepts `{refreshToken}` (or httpOnly cookie); axios interceptor retries once on 401.
 - Dev/test helper scripts live in `scripts/` (run from repo root).
 - The Atlas vector index is auto-created (best-effort) at server start; on local MongoDB only the fallback path is used.
+
+## Ingestion Jobs, GridFS & Audio (Phase 3A)
+- File bytes live in **GridFS** (bucket `uploads`, `utils/gridfs.js`); `File.gridfsId` is canonical, `path` is legacy-only. `/view` supports HTTP Range. `scripts/migrate-to-gridfs.js` migrates legacy disk files (`--dry-run`, idempotent).
+- Uploads return `202 {fileId, jobId}` and queue an `IngestionJob` (status/stage/progress/attempts/lockedAt/state). `INGEST_SYNC=true` keeps the old sync `201` path — tests set this in `tests/ingestion.test.js` per-suite.
+- `utils/jobRunner.js`: poll loop + atomic `findOneAndUpdate` claim; chunk upserts keyed `(file, metadata.seq)`; embed watermark `job.state.nextSeq`; transcript windows `job.state.audio.doneWindows`. Boot requeues stale locks (`INGEST_STALE_MS`); SIGTERM releases in-flight jobs. `GET /api/v1/jobs/:id`, `POST .../retry`, `GET /api/v1/files/:id/ingestion/stream` (SSE).
+- `File.status` (`processing|ready|failed`) — retriever + agent tools exclude non-ready files; `list_documents` shows real status.
+- Audio: magic-byte sniffed (`utils/audio.js`), `music-metadata` (ESM, dynamic `import()`) for duration; caps `AUDIO_MAX_MB`/`AUDIO_MAX_MIN`. `GEMINI_TRANSCRIBE_MODEL` verified at boot (falls back to `GEMINI_MODEL`). Inline ≤ `AUDIO_INLINE_MAX_MB`, else Files API (always deleted in `finally`). Long audio transcribes in `AUDIO_SEGMENT_SEC` windows — resumable per window.
+- Transcript chunks carry `metadata.startSec/endSec/speakers`; `<source>` tags expose `start="Ns"`; chat citations show `mm:ss` chips that seek `AudioPlayerModal` (fetch-to-blob). Meeting template: `POST /api/v1/openai/meeting-minutes`.
+- Tests: `GEMINI_MOCK` handles media parts (transcript JSON, `__setTranscript`, `__mediaFiles`/`__resetMedia` for Files-API lifecycle assertions).
+- Eval: `EVAL_MONGO_DB` overrides the db name on a shared cluster (Atlas eval → `quantum_ai_eval`); eval cleans its user/files/chunks/jobs unless `--keep`. Timestamp-citation metric scores `expectsTimestamp` questions.

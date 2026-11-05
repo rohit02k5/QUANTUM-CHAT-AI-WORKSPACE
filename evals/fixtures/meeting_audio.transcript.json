@@ -1,0 +1,10 @@
+[
+  { "startSec": 0, "endSec": 14, "speaker": "Speaker 1", "text": "Good morning everyone, quick standup for the Quantum AI workspace project." },
+  { "startSec": 14, "endSec": 32, "speaker": "Speaker 2", "text": "Phase 2 agent mode is merged. Tool selection hit one hundred percent on the eval harness." },
+  { "startSec": 32, "endSec": 55, "speaker": "Speaker 1", "text": "We decided to ship Phase 3A with GridFS storage instead of local disk because Render's filesystem is ephemeral." },
+  { "startSec": 55, "endSec": 78, "speaker": "Speaker 2", "text": "I will verify the Atlas M0 cluster vector index builds correctly before Friday's demo." },
+  { "startSec": 78, "endSec": 96, "speaker": "Speaker 1", "text": "Action item for Rohit: run the full eval suite against the quantum_ai_eval database." },
+  { "startSec": 96, "endSec": 118, "speaker": "Speaker 2", "text": "Open question: do we have enough Gemini quota to run the audio transcription eval on the free tier?" },
+  { "startSec": 118, "endSec": 138, "speaker": "Speaker 1", "text": "Risk noted: the free tier rate limits could slow down the Atlas verification run." },
+  { "startSec": 138, "endSec": 150, "speaker": "Speaker 2", "text": "Let's wrap. Next sync is Monday at ten." }
+]

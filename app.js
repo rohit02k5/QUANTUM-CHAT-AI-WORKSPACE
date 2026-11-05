@@ -87,6 +87,7 @@ app.use("/api/v1/auth", authLimiter, authRoutes);
 app.use("/api/v1/openai", aiLimiter, require("./routes/openaiRoutes"));
 app.use("/api/v1/chat", aiLimiter, require("./routes/chatRoutes"));
 app.use("/api/v1/files", require("./routes/fileRoutes"));
+app.use("/api/v1/jobs", require("./routes/jobRoutes"));
 app.use("/api/v1/studio", aiLimiter, require("./routes/studioRoutes")); // Studio Routes
 app.use("/api/v1/usage", require("./routes/usageRoutes"));
 app.use("/api/v1/personas", require("./routes/personaRoutes"));
