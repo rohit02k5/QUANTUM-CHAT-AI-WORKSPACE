@@ -18,7 +18,7 @@
   "description": "Quantum AI Intelligence Suite — chat, RAG knowledge base, and document studio",
   "dependencies": {
     "@google/genai": "^2.32.0",
-    "bcryptjs": "^2.4.3",
+    "bcryptjs": "^3.0.3",
     "body-parser": "^1.20.3",
     "colors": "^1.4.0",
     "cookie-parser": "^1.4.7",
