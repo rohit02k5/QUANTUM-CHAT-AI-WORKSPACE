@@ -1,0 +1,16 @@
+Release Notes — Build v3.7.19-rc.2
+
+This release candidate of the Meridian runtime focuses on scheduler hardening
+and telemetry export reliability.
+
+Changes in v3.7.19-rc.2:
+- Scheduler: coherency write-barrier ordering corrected (see incident ERR-4417-A).
+- Telemetry: export queue now drains before shutdown completes.
+- API: deprecated field lease_grace removed from /v2/status responses.
+
+Upgrade note for v3.7.19-rc.2: run the pre-upgrade script
+tools/precheck-3719.sh — it verifies that no node is holding a lease older than
+the 900 ms guard threshold before the rolling restart begins.
+
+Known issue: cold nodes may emit a spurious COH-WARN-7 once after upgrade; it is
+harmless and self-clears.

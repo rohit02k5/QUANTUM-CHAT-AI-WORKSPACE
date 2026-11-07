@@ -8,6 +8,9 @@ const usageEventSchema = new mongoose.Schema({
         required: true,
     },
     model: { type: String },
+    provider: { type: String }, // Phase 6 — which LLM provider served the call
+    fallback: { type: Boolean }, // Phase 6 — a non-primary chain entry answered
+    cacheHit: { type: Boolean }, // Phase 6 — served from the dev/eval disk cache
     promptTokens: { type: Number, default: 0 },
     outputTokens: { type: Number, default: 0 },
     latencyMs: { type: Number, default: 0 },

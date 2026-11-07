@@ -7,7 +7,7 @@ const kc = require("../controllers/apiKeyController");
 // ---- Key management (JWT, behind authLimiter) ----
 const mgmt = express.Router();
 mgmt.use(requireSignIn, authLimiter);
-mgmt.post("/keys", kc.create);
+mgmt.post("/keys", require("../controllers/demoController").denyDemo, kc.create);
 mgmt.get("/keys", kc.list);
 mgmt.delete("/keys/:id", kc.revoke);
 

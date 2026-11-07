@@ -24,6 +24,15 @@ const REINGEST = process.argv.includes("--reingest");
 // --retrieval-only: retrieval metrics only — no generation, no judge calls.
 // The embedding cache makes reruns of unchanged fixtures free.
 const RETRIEVAL_ONLY = process.argv.includes("--retrieval-only");
+// Phase 6C: --provider=name runs the answer path on one provider;
+// --providers=a,b produces a per-provider run each + a comparison table.
+// --no-cache forces live calls (skips the LLM_CACHE=disk response cache).
+const PROVIDER_ARG = (process.argv.find((a) => a.startsWith("--provider=")) || "").split("=")[1];
+const PROVIDERS_ARG = (process.argv.find((a) => a.startsWith("--providers=")) || "").split("=")[1];
+const NO_CACHE = process.argv.includes("--no-cache");
+// Cacheable deterministic calls (temperature-0 or explicit opt-in) hit the
+// dev disk cache when LLM_CACHE=disk — hits never count vs EVAL_MAX_CALLS.
+if (!NO_CACHE) process.env.LLM_CACHEABLE = "1";
 // On-disk embedding cache (gitignored): reruns cost zero embedding calls.
 // Opt out with EMBED_CACHE_DIR="".
 if (process.env.EMBED_CACHE_DIR === undefined) {
@@ -46,6 +55,10 @@ const REPORT_DIR = path.join(__dirname, "../evals/reports");
 
 let geminiCalls = 0;
 let evalRetries = 0;
+let lastAnswerProvider = null;
+let lastAnswerModel = null;
+let lastJudgeProvider = null;
+let lastJudgeModel = null;
 const budget = (n = 1) => {
     if (geminiCalls + n > MAX_CALLS) {
         throw new Error(`EVAL budget exceeded (EVAL_MAX_CALLS=${MAX_CALLS})`);
@@ -77,6 +90,8 @@ async function evalRetry(purpose, fn) {
 }
 
 // ---- LLM judge (single call/question, structured JSON) ----
+// Routes through LLM_CHAIN_JUDGE (task "judge") — may differ from the
+// answering provider; the report records both models.
 async function judge(geminiHelper, { question, answer, context, expectedFacts, unanswerable, injection }) {
     const prompt = `You are an evaluation judge. Given a QUESTION, the retrieved CONTEXT, the expected facts, and the model's ANSWER, output STRICT JSON only:
 {
@@ -95,12 +110,14 @@ ANSWER:
 ${answer}
 JSON:`;
     try {
-        const res = await evalRetry("judge", () => geminiHelper.generateContentWithRetry(
-            prompt,
-            { responseMimeType: "application/json" },
-            2,
-            "judge"
-        ));
+        const res = await evalRetry("judge", () => require("../utils/llm").generate({
+            task: "judge",
+            contents: prompt,
+            config: { responseMimeType: "application/json" },
+            kind: "judge",
+        }));
+        lastJudgeProvider = res.provider;
+        lastJudgeModel = res.model;
         const text = geminiHelper.getText(res);
         const m = text.match(/\{[\s\S]*\}/);
         return JSON.parse(m ? m[0] : text);
@@ -156,7 +173,36 @@ function citedPages(answer) {
     return [...pages];
 }
 
-async function main() {
+/** Resolve a model for --provider runs: env <NAME>_MODEL else provider's
+ *  first listed model (live model-list, never guessed). */
+async function providerModel(name) {
+    const envKey = `${name.toUpperCase()}_MODEL`;
+    if (process.env[envKey]) return process.env[envKey];
+    const p = require("../utils/llm").providers.get(name);
+    if (!p || !p.enabled) throw new Error(`provider "${name}" is not enabled (no key)`);
+    try {
+        const list = await p.listModels();
+        const first = [...list][0];
+        if (first) return first;
+    } catch (e) {
+        throw new Error(`provider "${name}" model list unavailable: ${e.message}`);
+    }
+    throw new Error(`no model resolved for provider "${name}" — set ${envKey}`);
+}
+
+async function runEval(providerName) {
+    // Scope every chain to the chosen provider for this run. The router
+    // reads chains lazily per call, so setting the env here is enough.
+    if (providerName) {
+        const model = await providerModel(providerName);
+        for (const env of ["LLM_CHAIN_ANSWER", "LLM_CHAIN_CHEAP", "LLM_CHAIN_AGENT", "LLM_CHAIN_JUDGE"]) {
+            // Judge stays on its own chain unless explicitly overridden —
+            // evaluating a provider must not also change the judge silently.
+            if (env === "LLM_CHAIN_JUDGE" && !process.env.LLM_CHAIN_JUDGE) continue;
+            process.env[env] = `${providerName}:${model}`;
+        }
+        console.log(`[eval] provider=${providerName} model=${model}`);
+    }
     let mongod;
     if (USE_MEMORY) {
         const { MongoMemoryServer } = require("mongodb-memory-server");
@@ -303,6 +349,8 @@ async function main() {
                     "chat"
                 ));
                 answer = geminiHelper.getText(res) || "";
+                lastAnswerProvider = res.provider;
+                lastAnswerModel = res.model;
             } catch (e) {
                 answer = `[GENERATION_FAILED: ${e.message}]`;
             }
@@ -615,13 +663,29 @@ async function main() {
     fs.mkdirSync(REPORT_DIR, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
     const apiCalls = { ...geminiHelper.calls };
-    const report = { timestamp: ts, geminiCalls, evalRetries, apiCalls, retrievalOnly: RETRIEVAL_ONLY, metrics, perQuestion, agentResults, tableResults, memoryResults, quizResults };
-    fs.writeFileSync(path.join(REPORT_DIR, `${ts}.json`), JSON.stringify(report, null, 2));
+    const cache = require("../utils/llm").__cacheStats();
+    const report = {
+        timestamp: ts,
+        provider: providerName || lastAnswerProvider || "default",
+        answerModel: lastAnswerModel,
+        judgeProvider: lastJudgeProvider,
+        judgeModel: lastJudgeModel,
+        geminiCalls, evalRetries, apiCalls, cache,
+        retrievalOnly: RETRIEVAL_ONLY, metrics, perQuestion, agentResults, tableResults, memoryResults, quizResults,
+    };
+    const reportName = providerName ? `${ts}-${providerName}.json` : `${ts}.json`;
+    fs.writeFileSync(path.join(REPORT_DIR, reportName), JSON.stringify(report, null, 2));
+    // Per-provider baselines; the default chain keeps evals/baseline.json.
+    if (providerName) {
+        const blDir = path.join(__dirname, "../evals/baselines");
+        fs.mkdirSync(blDir, { recursive: true });
+        fs.writeFileSync(path.join(blDir, `${providerName}.json`), JSON.stringify({ timestamp: ts, provider: providerName, answerModel: lastAnswerModel, judgeModel: lastJudgeModel, metrics }, null, 2));
+    }
 
     const md = [
         `# RAG Eval Report — ${ts}`,
         "",
-        `Mode: ${RETRIEVAL_ONLY ? "retrieval-only" : "full"} | Gemini calls (budgeted): ${geminiCalls} | API calls: embed ${apiCalls.embed} (cached ${apiCalls.embedCached}), generate ${apiCalls.generate} | eval retries: ${evalRetries} | questions: ${n} | agent cases: ${agentResults.length}`,
+        `Mode: ${RETRIEVAL_ONLY ? "retrieval-only" : "full"} | Provider: ${providerName || lastAnswerProvider || "default"} | Answer model: ${lastAnswerModel || "?"} | Judge: ${lastJudgeProvider || "?"}/${lastJudgeModel || "?"} | Cache: ${cache.hits} hit / ${cache.misses} miss | Gemini calls (budgeted): ${geminiCalls} | API calls: embed ${apiCalls.embed} (cached ${apiCalls.embedCached}), generate ${apiCalls.generate} | eval retries: ${evalRetries} | questions: ${n} | agent cases: ${agentResults.length}`,
         "",
         "| metric | value |",
         "|---|---|",
@@ -698,7 +762,36 @@ async function main() {
 
     await mongoose.disconnect();
     if (mongod) await mongod.stop();
-    process.exit(failed ? 1 : 0);
+    return { failed, metrics, provider: providerName || lastAnswerProvider || "default", answerModel: lastAnswerModel, judgeModel: lastJudgeModel, report: reportName };
+}
+
+async function main() {
+    const names = PROVIDERS_ARG ? PROVIDERS_ARG.split(",").map((s) => s.trim()).filter(Boolean)
+        : PROVIDER_ARG ? [PROVIDER_ARG] : [null];
+    const runs = [];
+    let anyFailed = false;
+    for (const name of names) {
+        const r = await runEval(name);
+        runs.push(r);
+        if (r.failed) anyFailed = true;
+    }
+    // Provider comparison table — only from real runs in THIS invocation.
+    if (runs.length > 1) {
+        const keys = [...new Set(runs.flatMap((r) => Object.keys(r.metrics || {}).filter((k) => typeof r.metrics[k] === "number")))];
+        const md = [
+            `# Provider Comparison — ${new Date().toISOString()}`,
+            "",
+            "| metric | " + runs.map((r) => `${r.provider} (${r.answerModel || "?"})`).join(" | ") + " |",
+            "|---|" + runs.map(() => "---").join("|") + "|",
+            ...keys.map((k) => `| ${k} | ${runs.map((r) => (typeof r.metrics[k] === "number" ? r.metrics[k].toFixed(3) : "—")).join(" | ")} |`),
+            "",
+            `Judge: ${[...new Set(runs.map((r) => `${r.judgeProvider}/${r.judgeModel}`))].join(", ")}`,
+        ].join("\n");
+        const ts = new Date().toISOString().replace(/[:.]/g, "-");
+        fs.writeFileSync(path.join(REPORT_DIR, `${ts}-comparison.md`), md);
+        console.log(`[eval] comparison: evals/reports/${ts}-comparison.md`);
+    }
+    process.exit(anyFailed ? 1 : 0);
 }
 
 main().catch((e) => {

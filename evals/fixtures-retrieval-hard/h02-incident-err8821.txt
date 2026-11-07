@@ -1,0 +1,16 @@
+Incident Report ERR-8821-C — Cache Coherency Subsystem
+
+Severity: high. Reported 2026-04-02. The cache coherency subsystem on node cluster
+west-2 began issuing stale reads under concurrent write load. Symptoms included
+intermittent 0.9% read skew during snapshot exports and elevated retry counts on
+the replication bus.
+
+Root cause: a clock-skew regression in the lease manager let a follower renew a
+read lease after the leader had granted a write lease for the same page.
+
+Workaround for ERR-8821-C: disable lease renewal with LEASE_RENEW=off and set
+CLOCK_SKEW_GUARD_MS=1200 until lease-manager patch 5.1.0 lands. Rollback marker:
+COH-ROLL-8821.
+
+Resolution: fixed in lease-manager patch 5.1.0; regression test added under
+tests/coherency/lease-skew-8821.spec.

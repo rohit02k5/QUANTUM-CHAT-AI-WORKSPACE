@@ -554,6 +554,7 @@ exports.streamIngestion = async (req, res) => {
             "X-Accel-Buffering": "no",
         });
         res.flushHeaders();
+        require("../utils/sseRegistry").register(res);
 
         const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
         send({ stage: job.stage, progress: job.progress, status: job.status, error: job.error });

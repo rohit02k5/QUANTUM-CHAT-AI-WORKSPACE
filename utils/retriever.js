@@ -181,6 +181,7 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = [], opts = {}) 
 
     // ---- vector leg ----
     let vectorResults = [];
+    let keywordOnly = false;
     if (mode !== "keyword") {
         // opts.queryVector lets callers reuse one embedding across RAG and
         // memory retrieval (Phase 5.1) instead of embedding twice.
@@ -189,6 +190,10 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = [], opts = {}) 
             if (!queryVector) queryVector = await geminiHelper.getEmbedding(query, { task: "query" });
             if (!Array.isArray(queryVector) || queryVector.length !== EMBEDDING_DIM) queryVector = null;
         } catch { queryVector = null; }
+        // Degraded retrieval (Phase 6B): when query embedding is unavailable
+        // the keyword leg still runs — the text index works independently of
+        // embeddings and of RAG_HYBRID. Flagged on the returned array.
+        keywordOnly = mode === "vector" && !queryVector;
 
         if (queryVector) {
             if (await vectorIndexAvailable()) try {
@@ -230,7 +235,7 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = [], opts = {}) 
 
     // ---- keyword leg (Mongo text index — owner-scoped by index prefix) ----
     let keywordResults = [];
-    if (mode !== "vector" && query.trim()) {
+    if ((mode !== "vector" || keywordOnly) && query.trim()) {
         try {
             if (!(await textIndexAvailable())) throw new Error("text index missing");
             keywordResults = await mongoose.connection.collection("chunks")
@@ -242,7 +247,13 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = [], opts = {}) 
                 .limit(candidates)
                 .toArray();
             const queryTokens = identifierTokens(query);
-            keywordResults = keywordResults.filter((c) => admitKeyword(c, queryTokens));
+            // In degraded keywordOnly mode the strict admission gate would
+            // return nothing for non-identifier questions — trust the text
+            // index's own ranking (extractive replies quote passages, so a
+            // noisy lexical hit can only be unhelpful, never fabricated).
+            keywordResults = keywordOnly
+                ? keywordResults
+                : keywordResults.filter((c) => admitKeyword(c, queryTokens));
         } catch {
             keywordResults = [];
         }
@@ -250,9 +261,13 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = [], opts = {}) 
 
     // ---- fuse / select ----
     let merged;
-    if (mode === "vector") {
+    if (mode === "vector" && !keywordOnly) {
         merged = vectorResults.slice(0, topK).map((c) => ({
             c, vectorScore: c.score, fused: c.score, legs: ["vector"],
+        }));
+    } else if (keywordOnly) {
+        merged = keywordResults.slice(0, topK).map((c) => ({
+            c, keywordScore: c.score, fused: c.score, legs: ["keyword"],
         }));
     } else if (mode === "keyword") {
         merged = keywordResults.slice(0, topK).map((c) => ({
@@ -284,7 +299,7 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = [], opts = {}) 
         .toArray();
     const nameMap = new Map(files.map((f) => [f._id.toString(), f.originalName]));
 
-    return merged.map((m) => {
+    const results = merged.map((m) => {
         const c = m.c;
         const fileId = c.file || c.fileId;
         const matchedBy = m.legs;
@@ -308,6 +323,8 @@ async function retrieveChunks(userId, query, topK = 3, fileIds = [], opts = {}) 
             matchedBy,
         };
     });
+    if (keywordOnly && results.length) results.keywordOnly = true; // degraded-mode flag
+    return results;
 }
 
 /** Format chunks into a prompt context block with citations metadata. */

@@ -14,6 +14,9 @@ const DailyAiQuota = require("../models/DailyAiQuota");
 const logger = require("./logger");
 
 const CAP = parseInt(process.env.USER_DAILY_AI_CAP || "60", 10);
+// Phase 6.4 — the portfolio demo account gets a much tighter daily budget.
+const DEMO_CAP = parseInt(process.env.DEMO_DAILY_AI_CAP || "20", 10);
+const capFor = (user) => (user && user.isDemo ? DEMO_CAP : CAP);
 
 function todayUTC() {
     return new Date().toISOString().slice(0, 10);
@@ -35,37 +38,39 @@ function isAdmin(email) {
  * The conditional update keeps concurrency honest: a doc only grows while
  * under the cap.
  */
-async function tryConsume(userId, email, { n = 1 } = {}) {
-    if (CAP <= 0 || isAdmin(email)) {
-        return { allowed: true, used: 0, remaining: Infinity, exempt: CAP <= 0 ? "disabled" : "admin" };
+async function tryConsume(userId, email, { n = 1, cap } = {}) {
+    const effective = cap ?? CAP;
+    if (effective <= 0 || isAdmin(email)) {
+        return { allowed: true, used: 0, remaining: Infinity, exempt: effective <= 0 ? "disabled" : "admin" };
     }
     const day = todayUTC();
     let doc;
     try {
         doc = await DailyAiQuota.findOneAndUpdate(
-            { user: userId, day, count: { $lt: CAP } },
+            { user: userId, day, count: { $lt: effective } },
             { $inc: { count: n }, $setOnInsert: { expires: dayExpiry() } },
             { upsert: true, new: true }
         );
     } catch (err) {
-        // count >= CAP: no doc matches, the upsert collides with the unique
+        // count >= cap: no doc matches, the upsert collides with the unique
         // {user,day} index → duplicate-key means "at cap", not an error.
         if (err.code !== 11000) throw err;
     }
     if (!doc) {
-        const used = (await DailyAiQuota.findOne({ user: userId, day }).select("count").lean())?.count ?? CAP;
+        const used = (await DailyAiQuota.findOne({ user: userId, day }).select("count").lean())?.count ?? effective;
         return { allowed: false, used, remaining: 0 };
     }
-    return { allowed: true, used: doc.count, remaining: Math.max(0, CAP - doc.count) };
+    return { allowed: true, used: doc.count, remaining: Math.max(0, effective - doc.count) };
 }
 
-async function status(userId, email) {
-    if (CAP <= 0 || isAdmin(email)) {
-        return { limit: CAP <= 0 ? null : CAP, used: 0, remaining: null, exempt: CAP <= 0 ? "disabled" : "admin" };
+async function status(userId, email, user) {
+    const effective = capFor(user);
+    if (effective <= 0 || isAdmin(email)) {
+        return { limit: effective <= 0 ? null : effective, used: 0, remaining: null, exempt: effective <= 0 ? "disabled" : "admin" };
     }
     const doc = await DailyAiQuota.findOne({ user: userId, day: todayUTC() }).select("count").lean();
     const used = doc?.count || 0;
-    return { limit: CAP, used, remaining: Math.max(0, CAP - used) };
+    return { limit: effective, used, remaining: Math.max(0, effective - used) };
 }
 
 /**
@@ -74,7 +79,7 @@ async function status(userId, email) {
  */
 async function dailyAiCap(req, res, next) {
     try {
-        const r = await tryConsume(req.user._id, req.user.email);
+        const r = await tryConsume(req.user._id, req.user.email, { cap: capFor(req.user) });
         res.set("X-AI-Daily-Remaining", String(r.remaining === Infinity ? "inf" : r.remaining));
         if (!r.allowed) {
             require("../models/UsageEvent").create({
@@ -95,4 +100,4 @@ async function dailyAiCap(req, res, next) {
     }
 }
 
-module.exports = { CAP, tryConsume, status, isAdmin, dailyAiCap };
+module.exports = { CAP, DEMO_CAP, capFor, tryConsume, status, isAdmin, dailyAiCap };

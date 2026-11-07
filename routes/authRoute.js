@@ -7,6 +7,11 @@ router.post('/register', registerController)
 router.post('/login', loginController)
 router.post('/logout', logoutController)
 
+// --- Demo mode (Phase 6.4): session for the seeded demo account ---
+const demo = require("../controllers/demoController");
+router.get("/demo-status", demo.demoStatus);
+router.post("/demo", demo.demoLogin);
+
 // --- Token Refresh ---
 router.post("/refresh", require("../controllers/authController").refreshController);
 
@@ -23,11 +28,13 @@ router.get(
 router.post(
     "/account/delete-token",
     require("../middlewares/authMiddleware").requireSignIn,
+    demo.denyDemo,
     require("../controllers/authController").issueDeletionToken
 );
 router.delete(
     "/account",
     require("../middlewares/authMiddleware").requireSignIn,
+    demo.denyDemo,
     require("../controllers/authController").deleteAccountController
 );
 

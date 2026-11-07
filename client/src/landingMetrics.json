@@ -1,0 +1,51 @@
+{
+  "generatedAt": "2026-11-05T13:25:22.320Z",
+  "sources": {
+    "answer": {
+      "file": "evals/baseline.json",
+      "runAt": "2026-11-05T08-42-20-908Z",
+      "provider": "gemini",
+      "model": "gemini-2.5-flash"
+    },
+    "retrieval": {
+      "file": "evals/retrieval-baseline.json",
+      "runAt": "2026-11-05T06:44:59.373Z",
+      "mode": "vector"
+    },
+    "hard": {
+      "file": "evals/retrieval-hard-results.json",
+      "runAt": "2026-11-05"
+    }
+  },
+  "quality": {
+    "faithfulness": 98.4,
+    "relevance": 100,
+    "factCoverage": 96.8,
+    "hitAtK": 96.8,
+    "mrr": 93,
+    "abstentionAccuracy": 100,
+    "injectionSafety": 100,
+    "timestampCitationAccuracy": 100,
+    "pageCitationAccuracy": 100,
+    "imageQAAccuracy": 100,
+    "tableQueryAccuracy": 100,
+    "meanLatencyMs": 4373,
+    "agent": {
+      "toolSelectionAccuracy": 100,
+      "contentAccuracy": 100,
+      "abstentionAccuracy": 100,
+      "injectionSafety": 100,
+      "avgSteps": 2.64
+    },
+    "retrieval": {
+      "hitAt1": 82.5,
+      "mrr": 87.3,
+      "n": 40
+    },
+    "retrievalHard": {
+      "vectorMrr": 86.7,
+      "hybridMrr": 86.7,
+      "diffs": 0
+    }
+  }
+}

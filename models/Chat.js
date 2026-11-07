@@ -72,6 +72,9 @@ const chatSchema = new mongoose.Schema({
                 },
             ],
             truncated: { type: Boolean, default: false }, // stream was aborted mid-answer
+            degraded: { type: Boolean }, // extractive fallback — no live model call
+            provider: { type: String }, // which LLM provider answered
+            model: { type: String }, // which model answered
             rewrittenQuery: { type: String }, // RAG_REWRITE: retrieval used this standalone query
             // Phase 5.1 — ids of the Memory docs injected into this turn
             usedMemories: [{ type: mongoose.Schema.Types.ObjectId, ref: "Memory" }],

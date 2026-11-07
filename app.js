@@ -93,6 +93,7 @@ app.use("/api/v1", require("./routes/memoryRoutes")); // /memories* + /me/memory
 app.use("/api/v1", require("./routes/studyRoutes")); // /study/* (Phase 5.2)
 app.use("/api/v1", require("./routes/exportRoutes")); // /export/* (Phase 5.3)
 app.use("/api/v1", require("./routes/apiKeyRoutes").mgmt); // /keys* (Phase 5.4)
+app.use("/api/v1/demo", require("./routes/demoRoutes")); // recorded replay (Phase 6.4)
 
 // Feature flags for the client (auth'd, no secrets)
 app.get("/api/v1/features", require("./middlewares/authMiddleware").requireSignIn, (req, res) => {
@@ -100,6 +101,8 @@ app.get("/api/v1/features", require("./middlewares/authMiddleware").requireSignI
     agent: process.env.FEATURE_AGENT !== "false",
     audio: process.env.FEATURE_AUDIO !== "false",
     multimodal: process.env.FEATURE_MULTIMODAL !== "false",
+    demo: process.env.DEMO_MODE === "true",
+    demoUser: !!req.user.isDemo,
   });
 });
 

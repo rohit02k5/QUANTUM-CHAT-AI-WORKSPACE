@@ -17,6 +17,9 @@ exports.health = async (req, res) => {
             embedding: process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-2",
             embeddingDims: geminiHelper.EMBEDDING_DIMS,
         },
+        // Phase 6: provider readiness — names, states, models, error codes.
+        // Never keys, URLs, or request content.
+        providers: require("../utils/llm").providerStatus(),
     };
 
     if (dbOk) {

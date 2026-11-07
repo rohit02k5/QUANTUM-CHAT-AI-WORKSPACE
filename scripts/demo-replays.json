@@ -1,0 +1,55 @@
+{
+    "_meta": {
+        "note": "Recorded demo replays (Phase 6.4). These streams were hand-authored from real event shapes in tests/stream.test.js + tests/agent.test.js because all providers were quota-exhausted at authoring time. Re-record with a live model via scripts/record-demo.js when quota allows. Source fileKeys resolve to the requesting user's seeded files at stream time.",
+        "recordedProvider": "gemini",
+        "recordedModel": "gemini-2.5-flash",
+        "recordedAt": "2026-11-05"
+    },
+    "scenarios": [
+        {
+            "id": "cited-rag",
+            "label": "Cited RAG answer",
+            "prompt": "What did the team decide about the storage migration?",
+            "events": [
+                { "type": "meta", "sources": [{ "fileKey": "platform-sync-transcript.txt", "originalName": "platform-sync-transcript.txt", "startSec": 762, "score": 0.81, "snippet": "Storage migration. We're at 71% on the shared tier." }], "usedMemories": [] },
+                { "type": "token", "text": "In the platform sync the team " },
+                { "type": "token", "text": "decided to move to a **dedicated database instance** rather than " },
+                { "type": "token", "text": "prune the archive collection — Dev argued pruning only buys " },
+                { "type": "token", "text": "about six weeks while migration solves it for the year. " },
+                { "type": "token", "text": "They were at **71% of the shared tier's storage budget**. [platform-sync-transcript.txt 12:40, 15:02]" },
+                { "type": "done", "degraded": false, "provider": "gemini", "model": "gemini-2.5-flash", "replay": true }
+            ]
+        },
+        {
+            "id": "agent-trace",
+            "label": "Agent run with visible trace",
+            "prompt": "What was the fix for ERR-8821-C and is it verified?",
+            "events": [
+                { "type": "meta", "sources": [] },
+                { "type": "tool_call", "id": "1:search_knowledge_base", "name": "search_knowledge_base", "argsPreview": "{\"query\": \"ERR-8821-C fix verification\"}" },
+                { "type": "tool_result", "id": "1:search_knowledge_base", "ok": true, "summary": "4 chunks from 2 files", "ms": 214 },
+                { "type": "tool_call", "id": "2:get_document_overview", "name": "get_document_overview", "argsPreview": "{\"fileName\": \"platform-reliability-report.txt\"}" },
+                { "type": "tool_result", "id": "2:get_document_overview", "ok": true, "summary": "overview loaded (5 chunks)", "ms": 96 },
+                { "type": "token", "text": "**Fix:** a clock-skew guard in the lease manager, shipped in " },
+                { "type": "token", "text": "**v3.7.20-rc.1** — a follower could previously renew a read lease after the " },
+                { "type": "token", "text": "leader had granted a write lease for the same page. " },
+                { "type": "token", "text": "**Verified:** post-deploy metrics show read skew back under 0.1% on west-2, " },
+                { "type": "token", "text": "and Marcus closed the action item in the sync. The two-replica lease test still needs an Atlas run. [platform-reliability-report.txt]" },
+                { "type": "done", "degraded": false, "provider": "gemini", "model": "gemini-2.5-flash", "replay": true }
+            ]
+        },
+        {
+            "id": "ask-data-chart",
+            "label": "Ask-your-data chart",
+            "prompt": "How did error budget consumption trend over the quarter?",
+            "events": [
+                { "type": "meta", "sources": [{ "fileKey": "incident-metrics.csv", "originalName": "incident-metrics.csv", "score": 0.88, "snippet": "month,sev1,sev2,sev3,error_budget_consumed_pct..." }] },
+                { "type": "token", "text": "Error-budget consumption **peaked in September at 41%** (driven by ERR-8821-C) " },
+                { "type": "token", "text": "and improved sharply to **22% in October** after the lease-manager fix shipped. " },
+                { "type": "token", "text": "Median latency also improved from 240ms to 186ms over the same period.\n\n" },
+                { "type": "token", "text": "| Month | Budget consumed | Median latency |\n|---|---|---|\n| Jul | 38% | 240ms |\n| Aug | 31% | 215ms |\n| Sep | 41% | 198ms |\n| Oct | 22% | 186ms |" },
+                { "type": "done", "degraded": false, "provider": "gemini", "model": "gemini-2.5-flash", "replay": true }
+            ]
+        }
+    ]
+}

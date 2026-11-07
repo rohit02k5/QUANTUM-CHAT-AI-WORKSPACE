@@ -1,0 +1,19 @@
+Internal Glossary — Rare Terms and Names
+
+Quenzel-Parrish estimator: an in-house statistical estimator used to detect
+slow-drift in replica clocks before lease violations occur. It operates on the
+inter-arrival times of heartbeat acknowledgements rather than on absolute
+timestamps. See also: lease manager, incident ERR-8821-C.
+
+Miriadne protocol: the internal name for the three-phase barrier release used by
+the coherency scheduler. Phase two is where the ERR-4417-A fencepost bug lived.
+The name predates the current team and appears only in this document and in
+scheduler source comments.
+
+Tolliver's bound: a rule of thumb (named after the engineer who proposed it)
+that read skew above 0.5% under nominal load always indicates a barrier or lease
+fault, never a network partition.
+
+Fenwick-Gray checksum trailer: the 64-byte integrity trailer appended to each
+assembled chunk by the ingestion pipeline; it is the structure corrupted in
+incident ERR-1093-F.

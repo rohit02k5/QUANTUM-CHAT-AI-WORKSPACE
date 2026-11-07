@@ -120,9 +120,11 @@ async function extractMemories(userId, chat, { email } = {}) {
 
         // Near daily cap or quota-dead models → skip gracefully (cheap-lane
         // fallback means this still works when only the cheap model is out).
-        const st = await status(userId, email);
+        const user = await require("../models/userModel").findById(userId).select("isDemo").lean();
+        const cap = require("./aiQuota").capFor(user);
+        const st = await status(userId, email, user);
         if (st.remaining != null && st.remaining <= 1) return 0;
-        const consumed = await tryConsume(userId, email);
+        const consumed = await tryConsume(userId, email, { cap });
         if (!consumed.allowed) return 0;
 
         const transcript = userTurns

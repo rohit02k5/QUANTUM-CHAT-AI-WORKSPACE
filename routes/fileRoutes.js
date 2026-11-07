@@ -110,7 +110,7 @@ const uploadSingle = (req, res, next) => {
     });
 };
 
-router.post("/upload", uploadSingle, uploadFile);
+router.post("/upload", require("../controllers/demoController").denyDemo, uploadSingle, uploadFile);
 router.get("/list", getUserFiles);
 router.get("/search", searchFiles);
 router.get("/:fileId/view", viewFile);

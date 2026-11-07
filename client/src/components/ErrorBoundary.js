@@ -35,14 +35,28 @@ class ErrorBoundary extends React.Component {
           <Typography variant="h6" sx={{ mb: 2 }}>
             {this.state.error && this.state.error.toString()}
           </Typography>
-          <Paper sx={{ p: 2, bgcolor: '#e2e8f0', borderRadius: 2, maxWidth: '80%', overflow: 'auto', mb: 4 }}>
-            <pre style={{ margin: 0 }}>
-              {this.state.errorInfo && this.state.errorInfo.componentStack}
-            </pre>
-          </Paper>
-          <Button variant="contained" onClick={() => window.location.href = '/'}>
-            Go Home
-          </Button>
+          {process.env.NODE_ENV !== 'production' && (
+            <Paper sx={{ p: 2, bgcolor: '#e2e8f0', borderRadius: 2, maxWidth: '80%', overflow: 'auto', mb: 4 }}>
+              <pre style={{ margin: 0 }}>
+                {this.state.errorInfo && this.state.errorInfo.componentStack}
+              </pre>
+            </Paper>
+          )}
+          <Box sx={{ display: 'flex', gap: 2 }}>
+            <Button variant="contained" onClick={() => window.location.href = '/'}>
+              Go Home
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                const api = require('../axiosConfig').default;
+                const id = api.lastRequestId || 'no request id captured';
+                navigator.clipboard?.writeText(id);
+              }}
+            >
+              Copy request id
+            </Button>
+          </Box>
         </Box>
       );
     }

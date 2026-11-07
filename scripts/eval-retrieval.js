@@ -37,8 +37,14 @@ if (process.env.EMBED_CACHE_DIR === undefined) {
     process.env.EMBED_CACHE_DIR = path.join(__dirname, "../evals/.embed-cache");
 }
 
-const FIXTURE_DIR = path.join(__dirname, "../evals/fixtures-retrieval");
-const GOLD = path.join(__dirname, "../evals/golden/retrieval.json");
+// Phase 6.1: --gold=<name> + --fixtures=<dir> run an alternate golden set
+// (e.g. retrieval-hard) — a separate held-out discrimination check, never
+// mixed into the default baseline or the dev/test split.
+const GOLD_NAME = (process.argv.find((a) => a.startsWith("--gold=")) || "--gold=retrieval").split("=")[1];
+const FIXTURES_NAME = (process.argv.find((a) => a.startsWith("--fixtures=")) || (GOLD_NAME === "retrieval" ? "--fixtures=fixtures-retrieval" : `--fixtures=fixtures-${GOLD_NAME}`)).split("=")[1];
+
+const FIXTURE_DIR = path.join(__dirname, `../evals/${FIXTURES_NAME}`);
+const GOLD = path.join(__dirname, `../evals/golden/${GOLD_NAME}.json`);
 const BASELINE = path.join(__dirname, "../evals/retrieval-baseline.json");
 const REPORT_DIR = path.join(__dirname, "../evals/reports");
 const TOP_K = 5; // need ranks through 5 for hit@5
@@ -195,7 +201,13 @@ async function main() {
     const ts = out.timestamp.replace(/[:.]/g, "-");
     const fp = path.join(REPORT_DIR, `retrieval-${ts}.json`);
     fs.writeFileSync(fp, JSON.stringify(out, null, 2));
-    if (WRITE_BASELINE) fs.writeFileSync(BASELINE, JSON.stringify(out, null, 2) + "\n");
+    if (WRITE_BASELINE) {
+        if (GOLD_NAME !== "retrieval") {
+            console.warn(`[retrieval-eval] --baseline ignored for --gold=${GOLD_NAME} (report only — baseline.json is reserved for the default set)`);
+        } else {
+            fs.writeFileSync(BASELINE, JSON.stringify(out, null, 2) + "\n");
+        }
+    }
 
     console.table(Object.fromEntries([["overall", overall], ...Object.entries(perCategory)]));
     console.log(`calls: embed ${calls.embed} (+${calls.embedCached} cached), generate ${calls.generate}`);

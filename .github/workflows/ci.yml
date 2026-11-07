@@ -20,6 +20,9 @@ jobs:
           key: mongodb-binary-${{ runner.os }}-8.2.6
       - run: npm ci
       - run: npm test
+      # Phase 6.2: fail CI on high/critical production vulnerabilities
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
 
   frontend-build:
     runs-on: ubuntu-latest

@@ -22,6 +22,11 @@ connectDB();
 mongoose.connection.once("open", async () => {
     const { VECTOR_INDEX } = require("./utils/retriever");
     const dims = require("./utils/geminiHelper").EMBEDDING_DIMS;
+    // SKIP_INDEX_ENSURE: for throwaway/verification databases where creating
+    // an Atlas Search index would consume the cluster's index slots.
+    if (process.env.SKIP_INDEX_ENSURE === "1") {
+        logger.info("[RAG] index ensure skipped (SKIP_INDEX_ENSURE=1)");
+    } else
     try {
         // createSearchIndex requires the collection to exist on Atlas
         const cols = await mongoose.connection.db.listCollections({ name: "chunks" }).toArray();
@@ -53,13 +58,14 @@ mongoose.connection.once("open", async () => {
         logger.warn(`[RAG] could not ensure keyword text index: ${err.message}`);
     }
 
-    require("./utils/geminiHelper")
-        .verifyConfiguredModels()
-        .then((r) => {
-            if (r.missing?.length) logger.warn({ missing: r.missing }, "[Gemini] configured models unavailable on this key");
-            else logger.info({ chat: r.chat, embedding: r.embedding }, "[Gemini] configured models verified");
+    require("./utils/llm")
+        .bootValidate()
+        .then(({ warnings, gemini }) => {
+            for (const w of warnings || []) logger.warn(w, "[llm] chain validation");
+            if (gemini?.missing?.length) logger.warn({ missing: gemini.missing }, "[Gemini] configured models unavailable on this key");
+            else if (gemini) logger.info({ chat: gemini.chat, embedding: gemini.embedding }, "[Gemini] configured models verified");
         })
-        .catch(() => {});
+        .catch((e) => logger.warn({ err: e.message }, "[llm] boot validation failed"));
 
     require("./controllers/fileController").cleanupTempFiles();
 
@@ -76,14 +82,20 @@ const server = app.listen(PORT, () => {
   console.log(`Server Running in ${process.env.DEV_MODE} on ${PORT}`.bgCyan.white);
 });
 
-// Graceful shutdown: stop claiming new jobs and release in-flight claims so
-// they resume after restart instead of going stale.
+// Graceful shutdown: end open SSE streams cleanly, stop claiming new jobs
+// and release in-flight claims so they resume after restart, close the DB.
 async function shutdown(signal) {
-    logger.info({ signal }, "shutdown — releasing ingestion jobs");
+    logger.info({ signal }, "shutdown — closing SSE streams, releasing ingestion jobs");
+    try {
+        require("./utils/sseRegistry").closeAll();
+    } catch (e) { /* ignore */ }
     try {
         await require("./utils/jobRunner").stopRunner();
     } catch (e) { /* ignore */ }
-    server.close(() => process.exit(0));
+    server.close(async () => {
+        try { await mongoose.disconnect(); } catch (e) { /* ignore */ }
+        process.exit(0);
+    });
     setTimeout(() => process.exit(0), 5000).unref();
 }
 process.on("SIGTERM", () => shutdown("SIGTERM"));

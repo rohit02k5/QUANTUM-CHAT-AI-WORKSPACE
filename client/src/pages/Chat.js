@@ -10,7 +10,7 @@ import ReportProblemIcon from "@mui/icons-material/ReportProblem";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome"; // For Mindmap
 import axios from "../axiosConfig";
 import { useLocation } from "react-router-dom";
-import { streamChat } from "../utils/streamChat";
+import { streamChat, streamReplay } from "../utils/streamChat";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { atomDark } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -157,7 +157,7 @@ const TraceTimeline = ({ trace }) => {
     );
 };
 
-const MessageBubble = ({ role, content, sources, truncated, trace, rewrittenQuery, usedMemories, usedMemoryDetails, onSeekAudio, onOpenPdf, onOpenImage }) => {
+const MessageBubble = ({ role, content, sources, truncated, degraded, replay, provider, model, trace, rewrittenQuery, usedMemories, usedMemoryDetails, onSeekAudio, onOpenPdf, onOpenImage }) => {
     const theme = useTheme();
     const isUser = role === "user";
     const [memOpen, setMemOpen] = useState(false);
@@ -238,7 +238,13 @@ const MessageBubble = ({ role, content, sources, truncated, trace, rewrittenQuer
                     </ReactMarkdown>
                 )}
                 {truncated && (
-                    <Chip size="small" label="partial answer" color="warning" variant="outlined" sx={{ mb: 1 }} />
+                    <Chip size="small" label="partial answer" color="warning" variant="outlined" sx={{ mb: 1, mr: 0.5 }} />
+                )}
+                {degraded && (
+                    <Chip size="small" label="AI unavailable — showing most relevant passages" color="warning" variant="outlined" sx={{ mb: 1 }} />
+                )}
+                {replay && (
+                    <Chip size="small" label="Recorded replay — not a live model call" color="info" variant="outlined" sx={{ mb: 1 }} />
                 )}
                 <TraceTimeline trace={trace} />
                 {sources && sources.length > 0 && (
@@ -293,6 +299,11 @@ const MessageBubble = ({ role, content, sources, truncated, trace, rewrittenQuer
                 {rewrittenQuery && (
                     <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1, fontStyle: "italic" }}>
                         Searched for: {rewrittenQuery}
+                    </Typography>
+                )}
+                {(provider || model) && !isUser && (
+                    <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5, opacity: 0.7 }}>
+                        answered by {provider ? `${provider}/` : ""}{model}
                     </Typography>
                 )}
                 {memCount > 0 && (
@@ -561,12 +572,25 @@ const Chat = () => {
     // Fallback: the original non-streaming endpoint (used when the stream
     // fails before delivering any events).
     const sendNonStream = async (body) => {
-        const { data } = await axios.post("/api/v1/chat/message", body);
-        setMessages((prev) => [...prev, { role: "model", content: data.response, sources: data.sources, rewrittenQuery: data.rewrittenQuery, usedMemories: data.usedMemories, usedMemoryDetails: data.usedMemoryDetails }]);
-        maybeShowMemoryNotice(data.usedMemoryDetails);
-        if (!chatId) {
-            setChatId(data.chatId);
-            loadChatHistory();
+        try {
+            const { data } = await axios.post("/api/v1/chat/message", body);
+            setMessages((prev) => [...prev, { role: "model", content: data.response, sources: data.sources, rewrittenQuery: data.rewrittenQuery, usedMemories: data.usedMemories, usedMemoryDetails: data.usedMemoryDetails, degraded: data.degraded }]);
+            maybeShowMemoryNotice(data.usedMemoryDetails);
+            if (!chatId) {
+                setChatId(data.chatId);
+                loadChatHistory();
+            }
+        } catch (err) {
+            // AI-unavailable states get a friendly inline message, not a dead end.
+            const code = err.response?.data?.code;
+            if (err.response?.status === 429 && (code === "AI_QUOTA_EXHAUSTED" || code === "AI_USER_CAP_REACHED")) {
+                const msg = code === "AI_USER_CAP_REACHED"
+                    ? "You've reached your daily AI limit. Your documents, study decks, memories and exports still work — the limit resets tomorrow."
+                    : "AI is temporarily unavailable (provider quota exhausted). Your documents, study decks, memories and exports still work — please try again later.";
+                setMessages((prev) => [...prev, { role: "model", content: msg, degraded: true }]);
+                return;
+            }
+            throw err;
         }
     };
 
@@ -604,6 +628,7 @@ const Chat = () => {
         let newChatId = chatId;
         let sawToken = false;
         let streamFailed = false;
+        let streamDegraded = false;
         const liveTrace = [];
         streamAccRef.current = "";
 
@@ -667,6 +692,7 @@ const Chat = () => {
                     } else if (evt.type === "done") {
                         newChatId = evt.chatId || newChatId;
                         if (evt.sources?.length) sources = evt.sources; // agent tool sources arrive after meta
+                        if (evt.degraded) streamDegraded = true;
                     } else if (evt.type === "error") {
                         streamFailed = true;
                     }
@@ -677,7 +703,7 @@ const Chat = () => {
 
             // Final synchronous flush so no token is lost to a pending rAF
             if (sawToken) {
-                updateStreamMessage({ truncated: wasAborted || streamFailed });
+                updateStreamMessage({ truncated: wasAborted || streamFailed, degraded: streamDegraded || undefined });
             }
 
             if (!sawToken && (result.refused || streamFailed || !result.ok)) {
@@ -714,6 +740,69 @@ const Chat = () => {
     };
 
     const handleStop = () => streamAbortRef.current?.abort();
+
+    // Phase 6.4 — replay a recorded demo through the SAME SSE client path.
+    // Clearly labelled; never presented as a live model call.
+    const [replayScenarios, setReplayScenarios] = useState([]);
+    const [replaying, setReplaying] = useState(false);
+
+    useEffect(() => {
+        if (features.demo || features.demoUser) {
+            axios.get("/api/v1/demo/scenarios").then(({ data }) => setReplayScenarios(data.scenarios || [])).catch(() => {});
+        }
+    }, [features.demo, features.demoUser]);
+
+    const runReplay = async (scenario) => {
+        if (replaying) return;
+        setReplaying(true);
+        setMessages((prev) => [...prev, { role: "user", content: scenario.prompt }]);
+        let acc = "";
+        let sources = null;
+        let replayDone = {};
+        const liveTrace = [];
+        const update = (extra = {}) => {
+            setMessages((prev) => {
+                const copy = [...prev];
+                copy[copy.length - 1] = {
+                    role: "model", content: acc, sources, replay: true,
+                    provider: replayDone.provider, model: replayDone.model,
+                    trace: liveTrace.length ? [...liveTrace] : undefined,
+                    ...extra,
+                };
+                return copy;
+            });
+        };
+        try {
+            await streamReplay({
+                scenario: scenario.id,
+                onEvent: (evt) => {
+                    if (evt.type === "meta") {
+                        sources = evt.sources || null;
+                        setMessages((prev) => [...prev, { role: "model", content: "", sources, replay: true }]);
+                    } else if (evt.type === "token") {
+                        acc += evt.text;
+                        update();
+                    } else if (evt.type === "tool_call") {
+                        const [step, tool] = String(evt.id).split(":");
+                        liveTrace.push({ step: Number(step), tool: evt.name || tool, argsPreview: evt.argsPreview, pending: true });
+                        update();
+                    } else if (evt.type === "tool_result") {
+                        const entry = liveTrace.find((t) => t.pending);
+                        if (entry) { entry.ok = evt.ok; entry.ms = evt.ms; entry.summary = evt.summary; entry.pending = false; }
+                        update();
+                    } else if (evt.type === "done") {
+                        replayDone = evt;
+                        update();
+                    }
+                },
+            });
+            update();
+        } catch {
+            toast.error("Replay failed");
+        } finally {
+            setReplaying(false);
+        }
+    };
 
     const handleKeyPress = (e) => {
         if (e.key === "Enter" && !e.shiftKey) {
@@ -895,7 +984,7 @@ const Chat = () => {
                             </Box>
                         )}
                         {messages.map((msg, index) => (
-                            <MessageBubble key={index} role={msg.role} content={msg.content} sources={msg.sources} truncated={msg.truncated} trace={msg.trace} rewrittenQuery={msg.rewrittenQuery} usedMemories={msg.usedMemories} usedMemoryDetails={msg.usedMemoryDetails} onSeekAudio={(fileId, sec) => setAudioSeek({ fileId, sec })} onOpenPdf={(fileId, page, name) => setPdfView({ fileId, page, name })} onOpenImage={(fileId, name) => setImageView({ fileId, name })} />
+                            <MessageBubble key={index} role={msg.role} content={msg.content} sources={msg.sources} truncated={msg.truncated} degraded={msg.degraded} replay={msg.replay} provider={msg.provider} model={msg.model} trace={msg.trace} rewrittenQuery={msg.rewrittenQuery} usedMemories={msg.usedMemories} usedMemoryDetails={msg.usedMemoryDetails} onSeekAudio={(fileId, sec) => setAudioSeek({ fileId, sec })} onOpenPdf={(fileId, page, name) => setPdfView({ fileId, page, name })} onOpenImage={(fileId, name) => setImageView({ fileId, name })} />
                         ))}
                         {loading && (
                             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -1042,6 +1131,26 @@ const Chat = () => {
                         </IconButton>
                     )}
                 </Paper>
+                {replayScenarios.length > 0 && (
+                    <Box sx={{ mt: 1.5, display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", justifyContent: "center" }}>
+                        <Typography variant="caption" color="text.secondary">
+                            Replay recorded demo:
+                        </Typography>
+                        {replayScenarios.map((s) => (
+                            <Chip
+                                key={s.id}
+                                size="small"
+                                variant="outlined"
+                                color="info"
+                                clickable
+                                disabled={replaying || loading}
+                                onClick={() => runReplay(s)}
+                                label={s.label}
+                                title={`Recorded replay, not a live model call — “${s.prompt}”`}
+                            />
+                        ))}
+                    </Box>
+                )}
             </Box>
 
             <AudioPlayerModal
